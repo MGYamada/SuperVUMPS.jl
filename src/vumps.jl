@@ -218,7 +218,6 @@ function svumps(h::Array{T}, A; tol = 1e-12, Niter = 1000, Hamiltonian = false) 
         end
     end
     res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(f_tol = tol, allow_f_increases = true, iterations = Niter))
-    println(res)
 
     AC .= Optim.minimizer(res)
     L, = polar(reshape(AC, χ * d, χ))
