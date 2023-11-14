@@ -1,0 +1,11 @@
+name = "SuperVUMPS"
+uuid = "251f20e1-0c2c-4c9f-ab3f-16280b56c0f4"
+authors = ["MGYamada <myspinor@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+OMEinsum = "ebe7aa44-baf0-506c-a96f-8464559b3922"
+Optim = "429524aa-4258-5aef-a3af-852621145aeb"
+Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
