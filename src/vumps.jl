@@ -106,7 +106,11 @@ function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-
         numiter += 1
     end
     C = R
-    AL, C, λ
+    if eltype(A) <: Real
+        real.(AL), real.(C), λ
+    else
+        AL, C, λ
+    end
 end
 
 function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, kwargs...) # fix later
