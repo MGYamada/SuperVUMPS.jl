@@ -156,7 +156,7 @@ function Optim.project_tangent!(::UniformMPS, dAC, AC)
         res = dAC1' * AC1 .+ AC1' * dAC1 .- dAC2' * AC2 .- AC2' * dAC2
         vcat(vec(real.(res)), vec(imag.(res)))
     end
-    z .-= J' * (inv(J * J' + 1e-14I) * (J * z))
+    z .-= J' * (inv(J * J' + 1e-8I) * (J * z))
     dAC .= reshape(Complex.(z[1 : d * χ ^ 2], z[d * χ ^ 2 + 1 : end]), χ, d, χ)
     dAC .-= AC .* real(dot(AC, dAC))
 end
