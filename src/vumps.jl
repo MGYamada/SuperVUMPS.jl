@@ -119,22 +119,45 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
 end
 
 function retractAC!(AC, χ, d)
-    AC1 = reshape(AC, χ * d, χ)
-    AC2 = Array(reshape(AC, χ, d * χ)')
+    AC1 = reshape(AC[:, :, :, 1], χ * d, χ)
+    AC2 = Array(reshape(AC[:, :, :, 2], χ, d * χ)')
     U, V, Q, D1, D2, R0 = svd(AC1, AC2)
     X = (R0 * Q') ./ sqrt(2)
     W, C = polar(X)
+    Ctemp = copy(C)
     AL = reshape((U * D1 * W) .* sqrt(2), χ, d, χ)
     AR = reshape((V * D2 * W)' .* sqrt(2), χ, d, χ)
     AL, L, = leftorth(AL)
-    AC .= ein"ij, jkl -> ikl"(L, AC)
+    temp1 = ein"ij, jkl -> ikl"(L, AC[:, :, :, 1])
     C .= L * C
     R, AR, = rightorth(AR)
-    AC .= ein"ijk, kl -> ijl"(AC, R)
+    temp1 .= ein"ijk, kl -> ijl"(temp1, R)
     C .= C * R
     U, P = polar(C)
-    AC .= ein"ij, jkl -> ikl"(P, AR)
-    AC ./= norm(AC)
+    temp1 .= ein"ij, jkl -> ikl"(P, AR)
+    temp1 ./= norm(temp1)
+
+    # AC1 = reshape(AC[:, :, :, 2], χ * d, χ)
+    # AC2 = Array(reshape(AC[:, :, :, 1], χ, d * χ)')
+    # U, V, Q, D1, D2, R0 = svd(AC1, AC2)
+    # X = (R0 * Q') ./ sqrt(2)
+    # W, C = polar(X)
+    # Ctemp = copy(C)
+    # AL = reshape((U * D1 * W) .* sqrt(2), χ, d, χ)
+    # AR = reshape((V * D2 * W)' .* sqrt(2), χ, d, χ)
+    # AL, L, = leftorth(AL)
+    # temp2 = ein"ij, jkl -> ikl"(L, AC[:, :, :, 2])
+    # C .= L * C
+    # R, AR, = rightorth(AR)
+    # temp2 .= ein"ijk, kl -> ijl"(temp2, R)
+    # C .= C * R
+    # U, P = polar(C)
+    # temp2 .= ein"ij, jkl -> ikl"(P, AR)
+    # temp2 ./= norm(temp2)
+
+    AC[:, :, :, 1] .= temp1
+    AC[:, :, :, 2] .= temp1
+    AC
 end
 
 struct UniformMPS <: Manifold end
@@ -146,19 +169,19 @@ end
 
 function Optim.project_tangent!(::UniformMPS, dAC, AC)
     χ, d, = size(AC)
-    AC1 = reshape(AC, χ * d, χ)
-    AC2 = reshape(AC, χ, d * χ)'
-    z = vcat(vec(real.(dAC)), vec(imag.(dAC)))
-    J, = jacobian(z) do x
-        y = Complex.(x[1 : d * χ ^ 2], x[d * χ ^ 2 + 1 : end])
-        dAC1 = reshape(y, χ * d, χ)
-        dAC2 = reshape(y, χ, d * χ)'
-        res = dAC1' * AC1 .+ AC1' * dAC1 .- dAC2' * AC2 .- AC2' * dAC2
-        vcat(vec(real.(res)), vec(imag.(res)))
-    end
-    z .-= J' * (inv(J * J' + 1e-8I) * (J * z))
-    dAC .= reshape(Complex.(z[1 : d * χ ^ 2], z[d * χ ^ 2 + 1 : end]), χ, d, χ)
-    dAC .-= AC .* real(dot(AC, dAC))
+    AC1 = reshape(AC[:, :, :, 1], χ * d, χ)
+    AC2 = Array(reshape(AC[:, :, :, 2], χ, d * χ)')
+    U, V, Q, D1, D2, R0 = svd(AC1, AC2)
+    dAC[:, :, :, 1] .= (dAC[:, :, :, 1] .+ dAC[:, :, :, 2]) ./ 2
+    dAC[:, :, :, 2] .= dAC[:, :, :, 1]
+    f(x) = (x -> vcat(real(vec(x)), imag(vec(x))))(U'[1:χ, :] * reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ * d, χ) .- V'[1:χ, :] * reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ, d * χ)')
+    J, = jacobian(f, cat(real(dAC[:, :, :, 1]), imag(dAC[:, :, :, 1]), dims = 4))
+    dAC[:, :, :, 1] .-= (x -> Complex.(x[:, :, :, 1], x[:, :, :, 2]))(reshape(J' * linsolve(J * J', J * vec(cat(real(dAC[:, :, :, 1]), imag(dAC[:, :, :, 1]), dims = 4)); ishermitian = true, isposdef = true)[1], χ, d, χ, 2))
+    dAC[:, :, :, 2] .= dAC[:, :, :, 1]
+
+    dAC[:, :, :, 1] .-= AC[:, :, :, 1] .* real(dot(AC[:, :, :, 1], dAC[:, :, :, 1]))
+    dAC[:, :, :, 2] .-= AC[:, :, :, 2] .* real(dot(AC[:, :, :, 2], dAC[:, :, :, 2]))
+    dAC
 end
 
 struct MixedCanonicalMPS{T}
@@ -188,7 +211,9 @@ end
 
 function canonicalMPS(T, χ, d)
     AC = randn(T, χ, d, χ)
-    retractAC!(AC, χ, d)
+    ACx = cat(AC, AC; dims = 4)
+    retractAC!(ACx, χ, d)
+    AC .= ACx[:, :, :, 1]
     L, = polar(reshape(AC, χ * d, χ))
     C, R = polar(reshape(AC, χ, d * χ); rev = true)
     AL = reshape(L, χ, d, χ)
@@ -201,9 +226,10 @@ function conjugateMPS(A)
 end
 
 function local_energy(AC, χ, d, h::Array{T, 4}) where T # two-site local Hamiltonian
-    L, = polar(reshape(AC, χ * d, χ))
+    AC1 = (AC[:, :, :, 1] .+ AC[:, :, :, 2]) ./ 2
+    L, = polar(reshape(AC1, χ * d, χ))
     AL = reshape(L, χ, d, χ)
-    real(ein"ijk, (klm, (jlno, (inp, pom))) -> "(conj.(AL), conj.(AC), h, AL, AC)[]) # fix later
+    real(ein"ijk, (klm, (jlno, (inp, pom))) -> "(conj.(AL), conj.(AC1), h, AL, AC1)[]) # fix later
 end
 
 function svumps(h::Array{T}, A; tol = 1e-12, Niter = 1000, Hamiltonian = false) where T
@@ -221,9 +247,9 @@ function svumps(h::Array{T}, A; tol = 1e-12, Niter = 1000, Hamiltonian = false) 
             return val
         end
     end
-    res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(f_tol = tol, allow_f_increases = true, iterations = Niter))
+    res = optimize(Optim.only_fg!(fg!), cat(AC, AC; dims = 4), LBFGS(manifold = UniformMPS()), Optim.Options(f_tol = tol, allow_f_increases = true, iterations = Niter))
 
-    AC .= Optim.minimizer(res)
+    AC .= Optim.minimizer(res)[:, :, :, 1]
     L, = polar(reshape(AC, χ * d, χ))
     C, R = polar(reshape(AC, χ, d * χ); rev = true)
     AL = reshape(L, χ, d, χ)
