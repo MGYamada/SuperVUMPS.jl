@@ -152,7 +152,10 @@ function Optim.project_tangent!(::UniformMPS, dAC, AC)
     U, V, Q, D1, D2, R0 = svd(AC1, AC2)
     f(x) = (x -> vcat(real(vec(x)), imag(vec(x))))(U'[1:χ, :] * reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ * d, χ) .- V'[1:χ, :] * reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ, d * χ)')
     J, = jacobian(f, cat(real(dAC), imag(dAC), dims = 4))
-    dAC .-= (x -> Complex.(x[:, :, :, 1], x[:, :, :, 2]))(reshape(J' * linsolve(J * J', J * vec(cat(real(dAC), imag(dAC), dims = 4)); ishermitian = true, isposdef = true)[1], χ, d, χ, 2))
+    x = vec(cat(real(dAC), imag(dAC), dims = 4))
+    cg!(x, J' * J, zeros(size(x)...))
+    y = reshape(x, χ, d, χ, 2)
+    dAC .= Complex.(y[:, :, :, 1], y[:, :, :, 2])
     dAC .-= AC .* real(dot(AC, dAC))
 end
 
