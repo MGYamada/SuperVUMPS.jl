@@ -149,13 +149,11 @@ function Optim.project_tangent!(::UniformMPS, dAC, AC)
     χ, d, = size(AC)
     AC1 = reshape(AC, χ * d, χ)
     AC2 = Array(reshape(AC, χ, d * χ)')
-    U, V, Q, D1, D2, R0 = svd(AC1, AC2)
-    f(x) = (x -> vcat(real(vec(x)), imag(vec(x))))(U'[1:χ, :] * reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ * d, χ) .- V'[1:χ, :] * reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ, d * χ)')
+    f(x) = (x -> vcat(real(vec(x)), imag(vec(x))))(AC1' * reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ * d, χ) .+ reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ * d, χ)' * AC1 .- AC2' * reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ, d * χ)' .- reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ, d * χ) * AC2)
     J, = jacobian(f, cat(real(dAC), imag(dAC), dims = 4))
-    x = vec(cat(real(dAC), imag(dAC), dims = 4))
-    x, = linsolve(J' * J, zeros(size(x)...), x; ishermitian = true, isposdef = true)
-    y = reshape(x, χ, d, χ, 2)
-    dAC .= Complex.(y[:, :, :, 1], y[:, :, :, 2])
+    vals, vecs = eigen(J * J')
+    invJJ = vecs * Diagonal(map(x -> abs(x) < 1e-12 ? zero(x) : inv(x), vals)) * vecs'
+    dAC .-= (x -> Complex.(x[:, :, :, 1], x[:, :, :, 2]))(reshape(J' * (invJJ * (J * vec(cat(real(dAC), imag(dAC), dims = 4)))), χ, d, χ, 2))
     dAC .-= AC .* real(dot(AC, dAC))
 end
 
