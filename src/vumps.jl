@@ -196,9 +196,7 @@ function conjugateMPS(A)
     MixedCanonicalMPS(conj.(A.AL), conj.(A.AR), conj.(A.AC), conj.(A.C))
 end
 
-function local_energy(AC, χ, d, h::Array{T, 4}) where T # two-site local Hamiltonian
-    L, = polar(reshape(AC, χ * d, χ))
-    AL = reshape(L, χ, d, χ)
+function local_energy(AL, AC, h::Array{T, 4}) where T # two-site local Hamiltonian
     real(ein"ijk, (klm, (jlno, (inp, pom))) -> "(conj.(AL), conj.(AC), h, AL, AC)[])
 end
 
@@ -209,7 +207,7 @@ function svumps(h::Array{T}, A; tol = 1e-12, Niter = 1000, Hamiltonian = false) 
     AC = ein"ij, jkl -> ikl"(P, A.AR) # polar gauge
 
     function fg!(F, G, x)
-        val, (dx,) = withgradient(y -> local_energy(y, χ, d, h), x)
+        val, (dx,) = withgradient(y -> local_energy(reshape(polar(reshape(y, χ * d, χ))[1], χ, d, χ), y, h), x)
         if G !== nothing
             G .= dx
         end
@@ -246,15 +244,11 @@ end
 
 Zygote.@adjoint function svumps(h::Array{T}, A; kwargs...) where T
     X = svumps(h, A; kwargs...)
-    E, A, = X
-    Abar = conjugateMPS(A)
+    _, A, = X
     X, function (Δ)
         if all(Δ[2 : end] .=== nothing)
-            if T <: Real
-                (Δ[1] .* T.(real.(ein"ijk, (klm, (inp, pom)) -> jlno"(Abar.AL, Abar.AC, A.AL, A.AC))), nothing)
-            else
-                (Δ[1] .* T.(ein"ijk, (klm, (inp, pom)) -> jlno"(Abar.AL, Abar.AC, A.AL, A.AC)), nothing)
-            end
+            _, back = pullback(x -> local_energy(A.AL, A.AC, x), h)
+            (back(Δ[1])[1], nothing)
         else
             error("MPS/effective Hamiltonian differentiation not supported")
         end
