@@ -243,3 +243,20 @@ function svumps(h::Array{T}, A; tol = 1e-12, Niter = 1000, Hamiltonian = false) 
         E, A
     end
 end
+
+Zygote.@adjoint function svumps(h::Array{T}, A; kwargs...) where T
+    X = svumps(h, A; kwargs...)
+    E, A, = X
+    Abar = conjugateMPS(A)
+    X, function (Δ)
+        if all(Δ[2 : end] .=== nothing)
+            if T <: Real
+                (Δ[1] .* T.(real.(ein"ijk, (klm, (inp, pom)) -> jlno"(Abar.AL, Abar.AC, A.AL, A.AC))), nothing)
+            else
+                (Δ[1] .* T.(ein"ijk, (klm, (inp, pom)) -> jlno"(Abar.AL, Abar.AC, A.AL, A.AC)), nothing)
+            end
+        else
+            error("MPS/effective Hamiltonian differentiation not supported")
+        end
+    end
+end
