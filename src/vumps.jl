@@ -149,12 +149,13 @@ function Optim.project_tangent!(::UniformMPS, dAC, AC)
     AC1 = reshape(AC, χ * d, χ)
     AC2 = reshape(AC, χ, d * χ)'
     f(x) = (x -> vcat(real(vec(x)), imag(vec(x))))(AC1' * reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ * d, χ) .+ reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ * d, χ)' * AC1 .- AC2' * reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ, d * χ)' .- reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ, d * χ) * AC2)
-    J = zeros(2 * χ ^ 2, 2 * χ ^ 2 * d)
+    J = zeros(2 * χ ^ 2, 2 * χ ^ 2 * d) # fix later
     for j in 1 : 2 * χ ^ 2 * d
-        J[:, j] .= f(reshape(Matrix{Float64}(I, 2 * χ ^ 2 * d, 2 * χ ^ 2 * d)[:, j], χ, d, χ, 2))
+        J[:, j] .= f(reshape(Matrix{Float64}(I, 2 * χ ^ 2 * d, 2 * χ ^ 2 * d)[:, j], χ, d, χ, 2)) # fix later
     end
-    U, S, V = svd(J)
-    dAC .-= (x -> Complex.(x[:, :, :, 1], x[:, :, :, 2]))(reshape(V * Diagonal(map(x -> abs(x) < 1e-12 ? zero(x) : one(x), S)) * (V' * vec(cat(real(dAC), imag(dAC), dims = 4))), χ, d, χ, 2))
+    vals, vecs = eigen(J * J')
+    invJJ = vecs * Diagonal(map(x -> abs(x) < 1e-12 ? zero(x) : inv(x), vals)) * vecs'
+    dAC .-= (x -> Complex.(x[:, :, :, 1], x[:, :, :, 2]))(reshape(J' * (invJJ * (J * vec(cat(real(dAC), imag(dAC), dims = 4)))), χ, d, χ, 2))
     dAC .-= AC .* real(dot(AC, dAC))
 end
 
