@@ -201,6 +201,25 @@ function local_energy(AL, AC, h::Array{T, 4}) where T # two-site local Hamiltoni
     real(ein"ijk, (klm, (jlno, (inp, pom))) -> "(conj.(AL), conj.(AC), h, AL, AC)[])
 end
 
+# function local_energy(AL, AC, h::Array{T, 6}) where T # three-site local Hamiltonian
+#     real(ein"ijk, (klm, (jlno, (inp, pom))) -> "(conj.(AL), conj.(AC), h, AL, AC)[])
+# end
+
+# function local_energy(AL, AC, h::Array{T, 8}) where T # four-site local Hamiltonian
+#     real(ein"ijk, (klm, (jlno, (inp, pom))) -> "(conj.(AL), conj.(AC), h, AL, AC)[])
+# end
+
+struct HamiltonianMPO{T}
+    left::Array{T, 3}
+    right::Array{T, 3}
+    MPO::Array{T, 4}
+end
+
+function local_energy(AL, AC, h::HamiltonianMPO)
+    C, R = polar(reshape(AC, χ, d * χ); rev = true) # fix later
+    AR = reshape(R, χ, d, χ)
+end
+
 function svumps(h::Union{Array{T, N}, HamiltonianMPO}, A; tol = 1e-12, Niter = 1000, Hamiltonian = false) where {T, N}
     χ, d, = size(A.AL)
     Abar = conjugateMPS(A)
