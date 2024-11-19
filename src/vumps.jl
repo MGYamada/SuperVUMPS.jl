@@ -124,7 +124,6 @@ function retractAC!(AC, χ, d)
     U, V, Q, D1, D2, R0 = svd(AC1, AC2)
     X = (R0 * Q') ./ sqrt(2)
     W, C = polar(X)
-    Ctemp = copy(C)
     AL = reshape((U * D1 * W) .* sqrt(2), χ, d, χ)
     AR = reshape((V * D2 * W)' .* sqrt(2), χ, d, χ)
     AL, L, = leftorth(AL)
@@ -148,12 +147,14 @@ end
 function Optim.project_tangent!(::UniformMPS, dAC, AC)
     χ, d, = size(AC)
     AC1 = reshape(AC, χ * d, χ)
-    AC2 = Array(reshape(AC, χ, d * χ)')
+    AC2 = reshape(AC, χ, d * χ)'
     f(x) = (x -> vcat(real(vec(x)), imag(vec(x))))(AC1' * reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ * d, χ) .+ reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ * d, χ)' * AC1 .- AC2' * reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ, d * χ)' .- reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ, d * χ) * AC2)
-    J, = jacobian(f, cat(real(dAC), imag(dAC), dims = 4))
-    vals, vecs = eigen(J * J')
-    invJJ = vecs * Diagonal(map(x -> abs(x) < 1e-12 ? zero(x) : inv(x), vals)) * vecs'
-    dAC .-= (x -> Complex.(x[:, :, :, 1], x[:, :, :, 2]))(reshape(J' * (invJJ * (J * vec(cat(real(dAC), imag(dAC), dims = 4)))), χ, d, χ, 2))
+    J = zeros(2 * χ ^ 2, 2 * χ ^ 2 * d)
+    for j in 1 : 2 * χ ^ 2 * d
+        J[:, j] .= f(reshape(Matrix{Float64}(I, 2 * χ ^ 2 * d, 2 * χ ^ 2 * d)[:, j], χ, d, χ, 2))
+    end
+    U, S, V = svd(J)
+    dAC .-= (x -> Complex.(x[:, :, :, 1], x[:, :, :, 2]))(reshape(V * Diagonal(map(x -> abs(x) < 1e-12 ? zero(x) : one(x), S)) * (V' * vec(cat(real(dAC), imag(dAC), dims = 4))), χ, d, χ, 2))
     dAC .-= AC .* real(dot(AC, dAC))
 end
 
@@ -200,7 +201,7 @@ function local_energy(AL, AC, h::Array{T, 4}) where T # two-site local Hamiltoni
     real(ein"ijk, (klm, (jlno, (inp, pom))) -> "(conj.(AL), conj.(AC), h, AL, AC)[])
 end
 
-function svumps(h::Array{T}, A; tol = 1e-12, Niter = 1000, Hamiltonian = false) where T
+function svumps(h::Union{Array{T, N}, HamiltonianMPO}, A; tol = 1e-12, Niter = 1000, Hamiltonian = false) where {T, N}
     χ, d, = size(A.AL)
     Abar = conjugateMPS(A)
     U, P = polar(A.C)
@@ -226,7 +227,7 @@ function svumps(h::Array{T}, A; tol = 1e-12, Niter = 1000, Hamiltonian = false) 
     Abar = conjugateMPS(A)
 
     E = real(ein"ijk, (klm, (jlno, (inp, pom))) -> "(Abar.AL, Abar.AC, h, A.AL, A.AC)[])
-    if Hamiltonian
+    if Hamiltonian && N == 4
         hr = h .- E .* ein"ij, kl -> ikjl"(Matrix{Float64}(I, d, d), Matrix{Float64}(I, d, d))
         Lh = regularize_left(A.AL, Abar.AL, A.C, Abar.C, hr, χ; tol = 1e-2tol)
         Rh = regularize_right(A.AR, Abar.AR, A.C, Abar.C, hr, χ; tol = 1e-2tol)
