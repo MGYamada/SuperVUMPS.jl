@@ -145,17 +145,11 @@ function Optim.retract!(::UniformMPS, AC)
 end
 
 function Optim.project_tangent!(::UniformMPS, dAC, AC)
-    χ, d, = size(AC)
-    AC1 = reshape(AC, χ * d, χ)
-    AC2 = reshape(AC, χ, d * χ)'
-    f(x) = (x -> vcat(real(vec(x)), imag(vec(x))))(AC1' * reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ * d, χ) .+ reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ * d, χ)' * AC1 .- AC2' * reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ, d * χ)' .- reshape(Complex.(x[:, :, :, 1], x[:, :, :, 2]), χ, d * χ) * AC2)
-    J = zeros(2 * χ ^ 2, 2 * χ ^ 2 * d) # fix later
-    for j in 1 : 2 * χ ^ 2 * d
-        J[:, j] .= f(reshape(Matrix{Float64}(I, 2 * χ ^ 2 * d, 2 * χ ^ 2 * d)[:, j], χ, d, χ, 2)) # fix later
-    end
-    vals, vecs = eigen(J * J')
-    invJJ = vecs * Diagonal(map(x -> abs(x) < 1e-12 ? zero(x) : inv(x), vals)) * vecs'
-    dAC .-= (x -> Complex.(x[:, :, :, 1], x[:, :, :, 2]))(reshape(J' * (invJJ * (J * vec(cat(real(dAC), imag(dAC), dims = 4)))), χ, d, χ, 2))
+    χ, = size(AC)
+    JJd = reshape(ein"(ijk, ijl), mn -> kmln"(conj.(AC), AC, Matrix{Float64}(I, χ, χ)) .+ ein"ij, (klm, nlm) -> ikjn"(Matrix{Float64}(I, χ, χ), conj.(AC), AC) .-
+    ein"ijk, ljm -> limk"(conj.(AC), AC) .- ein"ijk, ljm -> kmil"(conj.(AC), AC), χ ^ 2, χ ^ 2)
+    temp = reshape(linsolve(JJd, vec(ein"ijk, ijl -> kl"(conj.(AC), dAC) .- ein"ijk, ljk -> il"(dAC, conj.(AC))); ishermitian = true, isposdef = true)[1], χ, χ)
+    dAC .-= ein"ijk, kl -> ijl"(AC, temp) .- ein"ij, jkl -> ikl"(temp, AC)
     dAC .-= AC .* real(dot(AC, dAC))
 end
 
