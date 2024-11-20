@@ -137,18 +137,22 @@ function retractAC!(AC, χ, d)
     AC ./= norm(AC)
 end
 
-struct UniformMPS <: Manifold end
+struct UniformMPS <: Manifold
+    tol::Float64
+end
 
 function Optim.retract!(::UniformMPS, AC)
     χ, d, = size(AC)
     retractAC!(AC, χ, d)
 end
 
-function Optim.project_tangent!(::UniformMPS, dAC, AC)
+function Optim.project_tangent!(mfd::UniformMPS, dAC, AC)
     χ, = size(AC)
-    JJd = reshape(ein"(ijk, ijl), mn -> kmln"(conj.(AC), AC, Matrix{Float64}(I, χ, χ)) .+ ein"ij, (klm, nlm) -> ikjn"(Matrix{Float64}(I, χ, χ), conj.(AC), AC) .-
-    ein"ijk, ljm -> limk"(conj.(AC), AC) .- ein"ijk, ljm -> kmil"(conj.(AC), AC), χ ^ 2, χ ^ 2)
-    temp = reshape(linsolve(JJd + 1e-12I, vec(ein"ijk, ijl -> kl"(conj.(AC), dAC) .- ein"ijk, ljk -> il"(dAC, conj.(AC))); ishermitian = true, isposdef = true)[1], χ, χ)
+    CC1 = ein"ijk, ijl -> kl"(conj.(AC), AC)
+    CC2 = ein"klm, nlm -> kn"(conj.(AC), AC)
+    temp, = linsolve(ein"ijk, ijl -> kl"(conj.(AC), dAC) .- ein"ijk, ljk -> il"(dAC, conj.(AC)); ishermitian = true, isposdef = true) do x
+        CC1 * x .+ x * transpose(CC2) .- ein"ijk, (ljm, mk) -> li"(conj.(AC), AC, x) .- ein"ijk, (ljm, il) -> km"(conj.(AC), AC, x) .+ mfd.tol .* x
+    end
     dAC .-= ein"ijk, kl -> ijl"(AC, temp) .- ein"ij, jkl -> ikl"(temp, AC)
     dAC .-= AC .* real(dot(AC, dAC))
 end
@@ -230,7 +234,7 @@ function svumps(h::Union{Array{T, N}, HamiltonianMPO}, A; tol = 1e-12, Niter = 1
             return val
         end
     end
-    res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(f_tol = tol, allow_f_increases = true, iterations = Niter))
+    res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS(tol)), Optim.Options(f_tol = tol, allow_f_increases = true, iterations = Niter))
 
     AC .= Optim.minimizer(res)
     L, = polar(reshape(AC, χ * d, χ))
