@@ -148,7 +148,7 @@ function Optim.project_tangent!(::UniformMPS, dAC, AC)
     χ, = size(AC)
     JJd = reshape(ein"(ijk, ijl), mn -> kmln"(conj.(AC), AC, Matrix{Float64}(I, χ, χ)) .+ ein"ij, (klm, nlm) -> ikjn"(Matrix{Float64}(I, χ, χ), conj.(AC), AC) .-
     ein"ijk, ljm -> limk"(conj.(AC), AC) .- ein"ijk, ljm -> kmil"(conj.(AC), AC), χ ^ 2, χ ^ 2)
-    temp = reshape(linsolve(JJd, vec(ein"ijk, ijl -> kl"(conj.(AC), dAC) .- ein"ijk, ljk -> il"(dAC, conj.(AC))); ishermitian = true, isposdef = true)[1], χ, χ)
+    temp = reshape(linsolve(JJd + 1e-12I, vec(ein"ijk, ijl -> kl"(conj.(AC), dAC) .- ein"ijk, ljk -> il"(dAC, conj.(AC))); ishermitian = true, isposdef = true)[1], χ, χ)
     dAC .-= ein"ijk, kl -> ijl"(AC, temp) .- ein"ij, jkl -> ikl"(temp, AC)
     dAC .-= AC .* real(dot(AC, dAC))
 end
