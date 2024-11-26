@@ -49,7 +49,7 @@ Zygote.@adjoint function polar(A; rev = false)
             if Δ[1] !== nothing
                 ΔP += Δ[1]
             end
-            ΔAA = reshape(linsolve(x -> vec(P * reshape(x, d, d) .+ reshape(x, d, d) * P), vec(ΔP); ishermitian = false)[1], d, d) # fix later
+            ΔAA, = linsolve(x -> P * x .+ x * P, ΔP; ishermitian = true, isposdef = true)
             ΔA += (ΔAA .+ ΔAA') * A
             (ΔA,)
         end
@@ -69,7 +69,7 @@ Zygote.@adjoint function polar(A; rev = false)
             if Δ[2] !== nothing
                 ΔP += Δ[2]
             end
-            ΔAA = reshape(linsolve(x -> vec(P * reshape(x, d, d) .+ reshape(x, d, d) * P), vec(ΔP); ishermitian = false)[1], d, d) # fix later
+            ΔAA, = linsolve(x -> P * x .+ x * P, ΔP; ishermitian = true, isposdef = true)
             ΔA += A * (ΔAA .+ ΔAA')
             (ΔA,)
         end
@@ -77,7 +77,7 @@ Zygote.@adjoint function polar(A; rev = false)
 end
 
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...) # fix later
-    vals1, vecs1 = eigsolve(C' * C, 1, :LR; ishermitian = false, tol = tol, kwargs...) do ρ
+    vals1, vecs1 = eigsolve(C' * C, 1, :LR; ishermitian = false, tol = tol, maxiter = 1, kwargs...) do ρ
         ein"(ij, ikl), jkm -> lm"(ρ, conj.(A), A)
     end
     ρ = vecs1[1]
@@ -94,7 +94,7 @@ function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-
     R /= λ
     numiter = 1
     while norm(C .- R) > tol && numiter < maxiter
-        vals2, vecs2 = eigsolve(R, 1, :LR; ishermitian = false, tol = tol, kwargs...) do X
+        vals2, vecs2 = eigsolve(R, 1, :LR; ishermitian = false, tol = tol, maxiter = 1, kwargs...) do X
             ein"(ij, ikl), jkm -> lm"(X, conj.(AL), A)
         end
         C = vecs2[1]
@@ -137,9 +137,7 @@ function retractAC!(AC, χ, d)
     AC ./= norm(AC)
 end
 
-struct UniformMPS <: Manifold
-    tol::Float64
-end
+struct UniformMPS <: Manifold end
 
 function Optim.retract!(::UniformMPS, AC)
     χ, d, = size(AC)
@@ -151,7 +149,7 @@ function Optim.project_tangent!(mfd::UniformMPS, dAC, AC)
     CC1 = ein"ijk, ijl -> kl"(conj.(AC), AC)
     CC2 = ein"klm, nlm -> kn"(conj.(AC), AC)
     temp, = linsolve(ein"ijk, ijl -> kl"(conj.(AC), dAC) .- ein"ijk, ljk -> il"(dAC, conj.(AC)); ishermitian = true, isposdef = true) do x
-        CC1 * x .+ x * transpose(CC2) .- ein"ijk, (ljm, mk) -> li"(conj.(AC), AC, x) .- ein"ijk, (ljm, il) -> km"(conj.(AC), AC, x) .+ mfd.tol .* x
+        CC1 * x .+ x * transpose(CC2) .- ein"ijk, (ljm, mk) -> li"(conj.(AC), AC, x) .- ein"ijk, (ljm, il) -> km"(conj.(AC), AC, x)
     end
     dAC .-= ein"ijk, kl -> ijl"(AC, temp) .- ein"ij, jkl -> ikl"(temp, AC)
     dAC .-= AC .* real(dot(AC, dAC))
@@ -234,7 +232,7 @@ function svumps(h::Union{Array{T, N}, HamiltonianMPO}, A; tol = 1e-12, Niter = 1
             return val
         end
     end
-    res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS(tol)), Optim.Options(f_tol = tol, allow_f_increases = true, iterations = Niter))
+    res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(f_tol = tol, allow_f_increases = true, iterations = Niter))
 
     AC .= Optim.minimizer(res)
     L, = polar(reshape(AC, χ * d, χ))
