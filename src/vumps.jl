@@ -144,7 +144,7 @@ function Optim.retract!(::UniformMPS, AC)
     retractAC!(AC, χ, d)
 end
 
-function Optim.project_tangent!(mfd::UniformMPS, dAC, AC)
+function Optim.project_tangent!(::UniformMPS, dAC, AC)
     χ, = size(AC)
     CC1 = ein"ijk, ijl -> kl"(conj.(AC), AC)
     CC2 = ein"klm, nlm -> kn"(conj.(AC), AC)
@@ -222,6 +222,7 @@ function svumps(h::Union{Array{T, N}, HamiltonianMPO}, A; tol = 1e-12, Niter = 1
     Abar = conjugateMPS(A)
     U, P = polar(A.C)
     AC = ein"ij, jkl -> ikl"(P, A.AR) # polar gauge
+    retractAC!(AC, χ, d)
 
     function fg!(F, G, x)
         val, (dx,) = withgradient(y -> local_energy(reshape(polar(reshape(y, χ * d, χ))[1], χ, d, χ), y, h), x)
