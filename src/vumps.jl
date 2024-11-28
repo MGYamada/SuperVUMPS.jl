@@ -198,13 +198,13 @@ function local_energy(AL, AC, h::Array{T, 4}) where T # two-site local Hamiltoni
     real(ein"ijk, (klm, (jlno, (inp, pom))) -> "(conj.(AL), conj.(AC), h, AL, AC)[])
 end
 
-# function local_energy(AL, AC, h::Array{T, 6}) where T # three-site local Hamiltonian
-#     real(ein"ijk, (klm, (jlno, (inp, pom))) -> "(conj.(AL), conj.(AC), h, AL, AC)[])
-# end
+function local_energy(AL, AC, h::Array{T, 6}) where T # three-site local Hamiltonian
+    real(ein"ijk, (klm, (mno, (jlnpqr, (ips, (sqt, tro))))) -> "(conj.(AL), conj.(AL), conj.(AC), h, AL, AL, AC)[])
+end
 
-# function local_energy(AL, AC, h::Array{T, 8}) where T # four-site local Hamiltonian
-#     real(ein"ijk, (klm, (jlno, (inp, pom))) -> "(conj.(AL), conj.(AC), h, AL, AC)[])
-# end
+function local_energy(AL, AC, h::Array{T, 8}) where T # four-site local Hamiltonian
+    real(ein"ijk, (klm, (mno, (opq, (jlnprstu, (irv, (vsw, (wtx, xuq))))))) -> "(conj.(AL), conj.(AL), conj.(AL), conj.(AC), h, AL, AL, AL, AC)[])
+end
 
 struct HamiltonianMPO{T}
     left::Array{T, 3}
@@ -217,7 +217,21 @@ function local_energy(AL, AC, h::HamiltonianMPO)
     AR = reshape(R, χ, d, χ)
 end
 
-function svumps(h::Union{Array{T, N}, HamiltonianMPO}, A; tol = 1e-12, Niter = 1000, Hamiltonian = false) where {T, N}
+function Hamiltonian_construction(h::Array{T, 4}, A, Abar, E; tol = 1e-12) where T
+    χ, d, = size(A.AL)
+    hr = h .- E .* ein"ij, kl -> ikjl"(Matrix{Float64}(I, d, d), Matrix{Float64}(I, d, d))
+    Lh = regularize_left(A.AL, Abar.AL, A.C, Abar.C, hr, χ; tol = 1e-2tol)
+    Rh = regularize_right(A.AR, Abar.AR, A.C, Abar.C, hr, χ; tol = 1e-2tol)
+    HL = ein"ijk, (jlno, inp) -> klpo"(Abar.AL, hr, A.AL)
+    HC = ein"ijk, (lmn, (jmop, (ioq, rpn))) -> klqr"(Abar.AL, Abar.AR, hr, A.AL, A.AR)
+    HR = ein"klm, (jlno, pom) -> jknp"(Abar.AR, hr, A.AR)
+    HAC = ein"klpo, ij -> klipoj"(HL, Matrix{Float64}(I, χ, χ)) .+ ein"jknp, hi -> hjkinp"(HR, Matrix{Float64}(I, χ, χ)) .+
+    ein"ij, kl, mn -> ikmjln"(Lh, Matrix{Float64}(I, d, d), Matrix{Float64}(I, χ, χ)) .+ ein"ij, kl, mn -> ikmjln"(Matrix{Float64}(I, χ, χ), Matrix{Float64}(I, d, d), Rh)
+    HC_rtn = HC .+ ein"ij, kl -> ikjl"(Lh, Matrix{Float64}(I, χ, χ)) .+ ein"ij, kl -> ikjl"(Matrix{Float64}(I, χ, χ), Rh)
+    HAC, HC_rtn
+end
+
+function svumps(h::T, A; tol = 1e-12, Niter = 1000, Hamiltonian = false) where T
     χ, d, = size(A.AL)
     Abar = conjugateMPS(A)
     U, P = polar(A.C)
@@ -244,23 +258,14 @@ function svumps(h::Union{Array{T, N}, HamiltonianMPO}, A; tol = 1e-12, Niter = 1
     Abar = conjugateMPS(A)
 
     E = real(ein"ijk, (klm, (jlno, (inp, pom))) -> "(Abar.AL, Abar.AC, h, A.AL, A.AC)[])
-    if Hamiltonian && N == 4
-        hr = h .- E .* ein"ij, kl -> ikjl"(Matrix{Float64}(I, d, d), Matrix{Float64}(I, d, d))
-        Lh = regularize_left(A.AL, Abar.AL, A.C, Abar.C, hr, χ; tol = 1e-2tol)
-        Rh = regularize_right(A.AR, Abar.AR, A.C, Abar.C, hr, χ; tol = 1e-2tol)
-        HL = ein"ijk, (jlno, inp) -> klpo"(Abar.AL, hr, A.AL)
-        HC = ein"ijk, (lmn, (jmop, (ioq, rpn))) -> klqr"(Abar.AL, Abar.AR, hr, A.AL, A.AR)
-        HR = ein"klm, (jlno, pom) -> jknp"(Abar.AR, hr, A.AR)
-        HAC = ein"klpo, ij -> klipoj"(HL, Matrix{Float64}(I, χ, χ)) .+ ein"jknp, hi -> hjkinp"(HR, Matrix{Float64}(I, χ, χ)) .+
-        ein"ij, kl, mn -> ikmjln"(Lh, Matrix{Float64}(I, d, d), Matrix{Float64}(I, χ, χ)) .+ ein"ij, kl, mn -> ikmjln"(Matrix{Float64}(I, χ, χ), Matrix{Float64}(I, d, d), Rh)
-        HC_rtn = HC .+ ein"ij, kl -> ikjl"(Lh, Matrix{Float64}(I, χ, χ)) .+ ein"ij, kl -> ikjl"(Matrix{Float64}(I, χ, χ), Rh)
-        E, A, HAC, HC_rtn
+    if Hamiltonian
+        E, A, Hamiltonian_construction(h, A, Abar, E; tol = tol)...
     else
         E, A
     end
 end
 
-Zygote.@adjoint function svumps(h::Array{T}, A; kwargs...) where T
+Zygote.@adjoint function svumps(h, A; kwargs...)
     X = svumps(h, A; kwargs...)
     _, A, = X
     X, function (Δ)
