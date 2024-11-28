@@ -217,8 +217,9 @@ function local_energy(AL, AC, h::HamiltonianMPO)
     AR = reshape(R, χ, d, χ)
 end
 
-function Hamiltonian_construction(h::Array{T, 4}, A, Abar, E; tol = 1e-12) where T
+function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T
     χ, d, = size(A.AL)
+    Abar = conjugateMPS(A)
     hr = h .- E .* ein"ij, kl -> ikjl"(Matrix{Float64}(I, d, d), Matrix{Float64}(I, d, d))
     Lh = regularize_left(A.AL, Abar.AL, A.C, Abar.C, hr, χ; tol = 1e-2tol)
     Rh = regularize_right(A.AR, Abar.AR, A.C, Abar.C, hr, χ; tol = 1e-2tol)
@@ -255,11 +256,10 @@ function svumps(h::T, A; tol = 1e-12, Niter = 1000, Hamiltonian = false) where T
     AL = reshape(L, χ, d, χ)
     AR = reshape(R, χ, d, χ)
     A = MixedCanonicalMPS(AL, AR, AC, C)
-    Abar = conjugateMPS(A)
 
-    E = real(ein"ijk, (klm, (jlno, (inp, pom))) -> "(Abar.AL, Abar.AC, h, A.AL, A.AC)[])
+    E = local_energy(A.AL, A.AC, h)
     if Hamiltonian
-        E, A, Hamiltonian_construction(h, A, Abar, E; tol = tol)...
+        E, A, Hamiltonian_construction(h, A, E; tol = tol)...
     else
         E, A
     end
