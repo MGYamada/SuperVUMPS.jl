@@ -77,7 +77,7 @@ Zygote.@adjoint function polar(A; rev = false)
 end
 
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...) # fix later
-    vals1, vecs1 = eigsolve(C' * C, 1, :LR; ishermitian = false, tol = tol, maxiter = 1, kwargs...) do ρ
+    vals1, vecs1 = eigsolve(C' * C, 1, :LR; ishermitian = false, tol = tol, kwargs...) do ρ
         ein"(ij, ikl), jkm -> lm"(ρ, conj.(A), A)
     end
     ρ = vecs1[1]
@@ -94,7 +94,7 @@ function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-
     R /= λ
     numiter = 1
     while norm(C .- R) > tol && numiter < maxiter
-        vals2, vecs2 = eigsolve(R, 1, :LR; ishermitian = false, tol = tol, maxiter = 1, kwargs...) do X
+        vals2, vecs2 = eigsolve(R, 1, :LR; ishermitian = false, tol = tol, kwargs...) do X
             ein"(ij, ikl), jkm -> lm"(X, conj.(AL), A)
         end
         C = vecs2[1]
@@ -190,21 +190,11 @@ function canonicalMPS(T, χ, d)
     MixedCanonicalMPS(AL, AR, AC, C)
 end
 
-function conjugateMPS(A)
-    MixedCanonicalMPS(conj.(A.AL), conj.(A.AR), conj.(A.AC), conj.(A.C))
-end
+conjugateMPS(A) = MixedCanonicalMPS(conj.(A.AL), conj.(A.AR), conj.(A.AC), conj.(A.C))
 
-function local_energy(AL, AC, h::Array{T, 4}) where T # two-site local Hamiltonian
-    real(ein"ijk, (klm, (jlno, (inp, pom))) -> "(conj.(AL), conj.(AC), h, AL, AC)[])
-end
-
-function local_energy(AL, AC, h::Array{T, 6}) where T # three-site local Hamiltonian
-    real(ein"ijk, (klm, (mno, (jlnpqr, (ips, (sqt, tro))))) -> "(conj.(AL), conj.(AL), conj.(AC), h, AL, AL, AC)[])
-end
-
-function local_energy(AL, AC, h::Array{T, 8}) where T # four-site local Hamiltonian
-    real(ein"ijk, (klm, (mno, (opq, (jlnprstu, (irv, (vsw, (wtx, xuq))))))) -> "(conj.(AL), conj.(AL), conj.(AL), conj.(AC), h, AL, AL, AL, AC)[])
-end
+local_energy(AL, AC, h::Array{T, 4}) where T = real(ein"ijk, (klm, (jlno, (inp, pom))) -> "(conj.(AL), conj.(AC), h, AL, AC)[])
+local_energy(AL, AC, h::Array{T, 6}) where T = real(ein"ijk, (klm, (mno, (jlnpqr, (ips, (sqt, tro))))) -> "(conj.(AL), conj.(AL), conj.(AC), h, AL, AL, AC)[])
+local_energy(AL, AC, h::Array{T, 8}) where T = real(ein"ijk, (klm, (mno, (opq, (jlnprstu, (irv, (vsw, (wtx, xuq))))))) -> "(conj.(AL), conj.(AL), conj.(AL), conj.(AC), h, AL, AL, AL, AC)[])
 
 struct HamiltonianMPO{T}
     left::Array{T, 3}
@@ -212,10 +202,15 @@ struct HamiltonianMPO{T}
     MPO::Array{T, 4}
 end
 
-function local_energy(AL, AC, h::HamiltonianMPO)
-    C, R = polar(reshape(AC, χ, d * χ); rev = true) # fix later
-    AR = reshape(R, χ, d, χ)
-end
+# function local_energy(AL, AC, h::HamiltonianMPO)
+#     C, R = polar(reshape(AC, χ, d * χ); rev = true)
+#     AR = reshape(R, χ, d, χ)
+#     FL = ein"ij, (ikl, lm) -> jkm"(conj.(AL), h.left, AL)
+#     FR = ein"ij, (jkl, ml) -> ikm"(conj.(AR), h.right, AR)
+#     for i in 1:100 # fix later
+#         FL = ein"ijk, il"(FL, conj.(AL), h.MPO, AL)
+#     end
+# end
 
 function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T
     χ, d, = size(A.AL)
