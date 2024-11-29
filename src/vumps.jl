@@ -1,27 +1,3 @@
-safesign(x::Number) = iszero(x) ? one(x) : sign(x)
-
-qrpos(A) = qrpos!(copy(A))
-function qrpos!(A)
-    F = qr!(A)
-    Q = Matrix(F.Q)
-    R = F.R
-    phases = safesign.(diag(R))
-    rmul!(Q, Diagonal(phases))
-    lmul!(Diagonal(conj!(phases)), R)
-    Q, R
-end
-
-lqpos(A) = lqpos!(copy(A))
-function lqpos!(A)
-    F = qr!(Matrix(A'))
-    Q = Matrix(Matrix(F.Q)')
-    L = Matrix(F.R')
-    phases = safesign.(diag(L))
-    lmul!(Diagonal(phases), Q)
-    rmul!(L, Diagonal(conj!(phases)))
-    L, Q
-end
-
 function polar(A; rev = false)
     U, S, V = svd(A)
     if rev
@@ -78,18 +54,18 @@ end
 
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...) # fix later
     D, d, = size(A)
-    Q, R = qrpos(reshape(C * reshape(A, D, d * D), D * d, D))
+    Q, R = polar(reshape(C * reshape(A, D, d * D), D * d, D))
     AL = reshape(Q, D, d, D)
     λ = norm(R)
     R /= λ
     numiter = 1
     while norm(C .- R) > tol && numiter < maxiter
-        vals2, vecs2 = eigsolve(R, 1, :LR; ishermitian = false, tol = tol, kwargs...) do X
+        vals2, vecs2 = eigsolve(R, 1, :LR; ishermitian = false, tol = tol, maxiter = 1, kwargs...) do X
             ein"(ij, ikl), jkm -> lm"(X, conj.(AL), A)
         end
         C = vecs2[1]
-        _, C = qrpos(C)
-        Q, R = qrpos(reshape(C * reshape(A, D, d * D), D * d, D))
+        _, C = polar(C)
+        Q, R = polar(reshape(C * reshape(A, D, d * D), D * d, D))
         AL = reshape(Q, D, d, D)
         λ = norm(R)
         R /= λ
