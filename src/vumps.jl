@@ -77,16 +77,6 @@ Zygote.@adjoint function polar(A; rev = false)
 end
 
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...) # fix later
-    vals1, vecs1 = eigsolve(C' * C, 1, :LR; ishermitian = false, tol = tol, kwargs...) do ρ
-        ein"(ij, ikl), jkm -> lm"(ρ, conj.(A), A)
-    end
-    ρ = vecs1[1]
-    ρ += ρ'
-    ρ /= tr(ρ)
-    U, S, V = svd(ρ)
-    C = Diagonal(sqrt.(S)) * V'
-    _, C = qrpos(C)
-
     D, d, = size(A)
     Q, R = qrpos(reshape(C * reshape(A, D, d * D), D * d, D))
     AL = reshape(Q, D, d, D)
