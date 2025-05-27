@@ -89,7 +89,7 @@ function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T # f
     HAC, HC_rtn
 end
 
-function svumps(h::T, AL; tol = 1e-12, Niter = 1000, Hamiltonian = false) where T
+function svumps(h::T, AL; tol = 1e-8, Niter = 1000, Hamiltonian = false) where T
     χ, d, = size(AL)
 
     function fg!(F, G, x)
@@ -101,7 +101,7 @@ function svumps(h::T, AL; tol = 1e-12, Niter = 1000, Hamiltonian = false) where 
             return val
         end
     end
-    res = optimize(Optim.only_fg!(fg!), reshape(AL, χ * d, χ), LBFGS(manifold = Stiefel()), Optim.Options(f_tol = tol, allow_f_increases = true, iterations = Niter))
+    res = optimize(Optim.only_fg!(fg!), reshape(AL, χ * d, χ), LBFGS(manifold = Stiefel()), Optim.Options(g_tol = tol, allow_f_increases = true, iterations = Niter))
 
     AL .= reshape(Optim.minimizer(res), χ, d, χ)
     E = local_energy(AL, rightvect(AL), h)
