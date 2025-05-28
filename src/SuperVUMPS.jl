@@ -6,7 +6,7 @@ using Zygote
 using Optim
 using KrylovKit
 
-export svumps, local_energy, Hamiltonian_construction
+export svumps, local_energy, Hamiltonian_construction, canonicalMPS, MixedCanonicalMPS, conjugateMPS
 
 include("vumps.jl")
 
