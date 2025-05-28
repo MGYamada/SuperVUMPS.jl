@@ -7,6 +7,34 @@ function polar(A; rev = false)
     end
 end
 
+Zygote.@adjoint LinearAlgebra.svd(A) = svd_back(A)
+
+function svd_back(A; η = 1e-40)
+    U, S, V = svd(A)
+    (U, S, V), function (Δ)
+        ΔA = Δ[2] === nothing ? zeros(eltype(A), size(A)...) : U * Diagonal(Δ[2]) * V'
+        if Δ[1] !== nothing || Δ[3] !== nothing
+            S² = S .^ 2
+            invS = @. S / (S² + η)
+            F = S²' .- S²
+            @. F /= (F ^ 2 + η)
+            if Δ[1] !== nothing
+                J = F .* (U' * Δ[1])
+                ΔA .+= U * (J .+ J') * Diagonal(S) * V'
+                ΔA .+= (I - U * U') * Δ[1] * Diagonal(invS) * V'
+            end
+            if Δ[3] !== nothing
+                K = F .* (V' * Δ[3])
+                ΔA .+= U * Diagonal(S) * (K .+ K') * V'
+                L = Diagonal(diag(V' * Δ[3]))
+                ΔA .+= 0.5 .* U * Diagonal(invS) * (L' .- L) * V'
+                ΔA .+= U * Diagonal(invS) * Δ[3]' * (I - V * V')
+            end
+        end
+        (ΔA,)
+    end
+end
+
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...) # fix later
     D, d, = size(A)
     Q, R = polar(reshape(C * reshape(A, D, d * D), D * d, D))
@@ -39,19 +67,48 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     Array(transpose(C)), ein"ijk -> kji"(AL), λ
 end
 
-function rightvect(AL)
-    C, = rightorth(AL)
-    C * C'
+function retractAC!(AC, χ, d)
+    AC1 = reshape(AC, χ * d, χ)
+    AC2 = Array(reshape(AC, χ, d * χ)')
+    U, V, Q, D1, D2, R0 = svd(AC1, AC2)
+    X = (R0 * Q') ./ sqrt(2)
+    W, C = polar(X)
+    AL = reshape((U * D1 * W) .* sqrt(2), χ, d, χ)
+    AR = reshape((V * D2 * W)' .* sqrt(2), χ, d, χ)
+    AL, L, = leftorth(AL)
+    AC .= ein"ij, jkl -> ikl"(L, AC)
+    C .= L * C
+    R, AR, = rightorth(AR)
+    AC .= ein"ijk, kl -> ijl"(AC, R)
+    C .= C * R
+    U, P = polar(C)
+    AC .= ein"ij, jkl -> ikl"(P, AR)
+    AC ./= norm(AC)
 end
 
-Zygote.@adjoint function rightvect(AL)
-    R = rightvect(AL)
-    R, function (Δ)
-        ALbar = conj.(AL)
-        ξ, = linsolve(x -> ein"(ij, ikl), jkm -> lm"(x, ALbar, AL) .- x, Δ - I * dot(R, Δ))
-        _, back = pullback(x -> ein"ijk, ljm -> ilkm"(x, conj(x)), AL)
-        back(-ein"ij, kl -> ijkl"(ξ, conj.(R)))
+struct UniformMPS <: Manifold end
+
+function Optim.retract!(::UniformMPS, AC)
+    χ, d, = size(AC)
+    retractAC!(AC, χ, d)
+end
+
+function Optim.project_tangent!(::UniformMPS, dAC, AC)
+    χ, = size(AC)
+    CC1 = ein"ijk, ijl -> kl"(conj.(AC), AC)
+    CC2 = ein"klm, nlm -> kn"(conj.(AC), AC)
+    temp, = linsolve(ein"ijk, ijl -> kl"(conj.(AC), dAC) .- ein"ijk, ljk -> il"(dAC, conj.(AC)); ishermitian = true, isposdef = true, tol = 1e-14) do x
+        CC1 * x .+ x * transpose(CC2) .- ein"ijk, (ljm, mk) -> li"(conj.(AC), AC, x) .- ein"ijk, (ljm, il) -> km"(conj.(AC), AC, x)
     end
+    dAC .-= ein"ijk, kl -> ijl"(AC, temp) .- ein"ij, jkl -> ikl"(temp, AC)
+    dAC .-= AC .* real(dot(AC, dAC))
+end
+
+struct MixedCanonicalMPS{T}
+    AL::Array{T, 3}
+    AR::Array{T, 3}
+    AC::Array{T, 3}
+    C::Matrix{T}
 end
 
 function regularize_left(AL, ALbar, C, Cbar, h, χ; tol = 1e-12)
@@ -72,9 +129,23 @@ function regularize_right(AR, ARbar, C, Cbar, h, χ; tol = 1e-12)
     (Rh .+ Rh') ./ 2
 end
 
-local_energy(AL, R, h::Array{T, 4}) where T = real(ein"ijk, (klm, (jlno, (inp, (poq, qm)))) -> "(conj.(AL), conj.(AL), h, AL, AL, R)[])
+function canonicalMPS(T, χ, d)
+    AC = randn(T, χ, d, χ)
+    retractAC!(AC, χ, d)
+    L, = polar(reshape(AC, χ * d, χ))
+    C, R = polar(reshape(AC, χ, d * χ); rev = true)
+    AL = reshape(L, χ, d, χ)
+    AR = reshape(R, χ, d, χ)
+    MixedCanonicalMPS(AL, AR, AC, C)
+end
 
-function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T # fix later
+conjugateMPS(A) = MixedCanonicalMPS(conj.(A.AL), conj.(A.AR), conj.(A.AC), conj.(A.C))
+
+local_energy(AL, AC, h::Array{T, 4}) where T = real(ein"ijk, (klm, (jlno, (inp, pom))) -> "(conj.(AL), conj.(AC), h, AL, AC)[])
+local_energy(AL, AC, h::Array{T, 6}) where T = real(ein"ijk, (klm, (mno, (jlnpqr, (ips, (sqt, tro))))) -> "(conj.(AL), conj.(AL), conj.(AC), h, AL, AL, AC)[])
+local_energy(AL, AC, h::Array{T, 8}) where T = real(ein"ijk, (klm, (mno, (opq, (jlnprstu, (irv, (vsw, (wtx, xuq))))))) -> "(conj.(AL), conj.(AL), conj.(AL), conj.(AC), h, AL, AL, AL, AC)[])
+
+function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T
     χ, d, = size(A.AL)
     Abar = conjugateMPS(A)
     hr = h .- E .* ein"ij, kl -> ikjl"(Matrix{Float64}(I, d, d), Matrix{Float64}(I, d, d))
@@ -89,11 +160,15 @@ function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T # f
     HAC, HC_rtn
 end
 
-function svumps(h::T, AL; tol = 1e-8, Niter = 1000, Hamiltonian = false) where T
-    χ, d, = size(AL)
+function svumps(h::T, A; tol = 1e-8, Niter = 1000, Hamiltonian = false) where T
+    χ, d, = size(A.AL)
+    Abar = conjugateMPS(A)
+    U, P = polar(A.C)
+    AC = ein"ij, jkl -> ikl"(P, A.AR) # polar gauge
+    retractAC!(AC, χ, d)
 
     function fg!(F, G, x)
-        val, (dx,) = withgradient(y -> local_energy(reshape(y, χ, d, χ), rightvect(reshape(y, χ, d, χ)), h), x)
+        val, (dx,) = withgradient(y -> (local_energy(reshape(polar(reshape(y, χ * d, χ))[1], χ, d, χ), y, h)), x)
         if G !== nothing
             G .= dx
         end
@@ -101,24 +176,29 @@ function svumps(h::T, AL; tol = 1e-8, Niter = 1000, Hamiltonian = false) where T
             return val
         end
     end
-    res = optimize(Optim.only_fg!(fg!), reshape(AL, χ * d, χ), LBFGS(manifold = Stiefel()), Optim.Options(g_tol = tol, allow_f_increases = true, iterations = Niter))
+    res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_tol = tol, allow_f_increases = true, iterations = Niter))
 
-    AL .= reshape(Optim.minimizer(res), χ, d, χ)
-    E = local_energy(AL, rightvect(AL), h)
+    AC .= Optim.minimizer(res)
+    L, = polar(reshape(AC, χ * d, χ))
+    C, R = polar(reshape(AC, χ, d * χ); rev = true)
+    AL = reshape(L, χ, d, χ)
+    AR = reshape(R, χ, d, χ)
+    A = MixedCanonicalMPS(AL, AR, AC, C)
+
+    E = local_energy(A.AL, A.AC, h)
     if Hamiltonian
-        E, AL, Hamiltonian_construction(h, AL, E; tol = tol)...
+        E, A, Hamiltonian_construction(h, A, E; tol = tol)...
     else
-        E, AL
+        E, A
     end
 end
 
-Zygote.@adjoint function svumps(h, AL; kwargs...)
-    X = svumps(h, AL; kwargs...)
-    _, AL, = X
+Zygote.@adjoint function svumps(h, A; kwargs...)
+    X = svumps(h, A; kwargs...)
+    _, A, = X
     X, function (Δ)
         if all(Δ[2 : end] .=== nothing)
-            R = rightvect(AL)
-            _, back = pullback(x -> local_energy(AL, R, x), h)
+            _, back = pullback(x -> local_energy(A.AL, A.AC, x), h)
             (back(Δ[1])[1], nothing)
         else
             error("MPS/effective Hamiltonian differentiation not supported")
