@@ -86,21 +86,36 @@ function retractAC!(AC, χ, d)
     AC ./= norm(AC)
 end
 
-struct UniformMPS <: Manifold end
+struct UniformMPS <: Manifold
+    tol::Float64
+end
 
 function Optim.retract!(::UniformMPS, AC)
     χ, d, = size(AC)
     retractAC!(AC, χ, d)
 end
 
-function Optim.project_tangent!(::UniformMPS, dAC, AC)
-    χ, = size(AC)
-    CC1 = ein"ijk, ijl -> kl"(conj.(AC), AC)
-    CC2 = ein"klm, nlm -> kn"(conj.(AC), AC)
-    temp, = linsolve(ein"ijk, ijl -> kl"(conj.(AC), dAC) .- ein"ijk, ljk -> il"(dAC, conj.(AC)); ishermitian = true, isposdef = true, tol = 1e-14) do x
-        CC1 * x .+ x * transpose(CC2) .- ein"ijk, (ljm, mk) -> li"(conj.(AC), AC, x) .- ein"ijk, (ljm, il) -> km"(conj.(AC), AC, x)
+function Optim.project_tangent!(mfd::UniformMPS, dAC, AC)
+    χ, d, = size(AC)
+    U1, S1, V1 = svd(reshape(AC, χ, d * χ))
+    U2, S2, V2 = svd(reshape(AC, χ * d, χ) * U1)
+    U2 .= U2 * V2'
+    V2 .= U1
+    sqrtS1 = sqrt.(S1)
+    invsqrtS1 = inv.(sqrtS1)
+    sqrtS2 = sqrt.(S2)
+    invsqrtS2 = inv.(sqrtS2)
+    K1 = Diagonal(invsqrtS1) * (U1' * reshape(dAC, χ, d * χ) * V1) * Diagonal(sqrtS1)
+    K2 = Diagonal(invsqrtS2) * (V2' * reshape(dAC, χ * d, χ)' * U2) * Diagonal(sqrtS2)
+    temp, = linsolve((x -> cat(real(x), imag(x); dims = 3))(K1 .+ K1' .- (K2 .+ K2')); ishermitian = true, isposdef = true, tol = 1e-14) do x
+        h = x[:, :, 1] .+ im .* x[:, :, 2]
+        dac = reshape(U1 * (Diagonal(invsqrtS1) * (h .+ h') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (h .+ h') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
+        K1 = Diagonal(invsqrtS1) * (U1' * reshape(dac, χ, d * χ) * V1) * Diagonal(sqrtS1)
+        K2 = Diagonal(invsqrtS2) * (V2' * reshape(dac, χ * d, χ)' * U2) * Diagonal(sqrtS2)
+        (x -> cat(real(x), imag(x); dims = 3))(K1 .+ K1' .- (K2 .+ K2')) .+ mfd.tol .* x
     end
-    dAC .-= ein"ijk, kl -> ijl"(AC, temp) .- ein"ij, jkl -> ikl"(temp, AC)
+    h = temp[:, :, 1] .+ im .* temp[:, :, 2]
+    dAC .-= reshape(U1 * (Diagonal(invsqrtS1) * (h .+ h') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (h .+ h') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
     dAC .-= AC .* real(dot(AC, dAC))
 end
 
@@ -176,7 +191,7 @@ function svumps(h::T, A; tol = 1e-8, Niter = 1000, Hamiltonian = false) where T
             return val
         end
     end
-    res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_tol = tol, allow_f_increases = true, iterations = Niter))
+    res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS(tol)), Optim.Options(g_tol = tol, allow_f_increases = true, iterations = Niter))
 
     AC .= Optim.minimizer(res)
     L, = polar(reshape(AC, χ * d, χ))
