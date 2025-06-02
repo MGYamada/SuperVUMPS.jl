@@ -93,7 +93,7 @@ function Optim.retract!(::UniformMPS, AC)
     retractAC!(AC, χ, d)
 end
 
-function Optim.project_tangent!(::UniformMPS, dAC, AC; η = 1e-40)
+function Optim.project_tangent!(::UniformMPS, dAC, AC)
     χ, d, = size(AC)
     U1, S1, V1 = svd(reshape(AC, χ, d * χ))
     U2, S2, V2 = svd(reshape(AC, χ * d, χ) * U1)
@@ -106,12 +106,12 @@ function Optim.project_tangent!(::UniformMPS, dAC, AC; η = 1e-40)
     K1 = Diagonal(invsqrtS1) * (U1' * reshape(dAC, χ, d * χ) * V1) * Diagonal(sqrtS1)
     K2 = Diagonal(invsqrtS2) * (V2' * reshape(dAC, χ * d, χ)' * U2) * Diagonal(sqrtS2)
     temp, = linsolve(K1 .+ K1' .- (K2 .+ K2'); ishermitian = true, isposdef = true, tol = 1e-14) do x
-        dac = reshape(U1 * (Diagonal(invsqrtS1) * (x + x') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (x + x') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
+        dac = reshape(U1 * (Diagonal(invsqrtS1) * (x .+ x') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (x .+ x') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
         K1 = Diagonal(invsqrtS1) * (U1' * reshape(dac, χ, d * χ) * V1) * Diagonal(sqrtS1)
         K2 = Diagonal(invsqrtS2) * (V2' * reshape(dac, χ * d, χ)' * U2) * Diagonal(sqrtS2)
-        K1 .+ K1' .- (K2 .+ K2')
+        K1 .+ K1' .- (K2 .+ K2') .+ 1e-8 .* x
     end
-    dAC .-= reshape(U1 * (Diagonal(invsqrtS1) * (temp + temp') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (temp + temp') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
+    dAC .-= reshape(U1 * (Diagonal(invsqrtS1) * (temp .+ temp') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (temp .+ temp') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
     dAC .-= AC .* real(dot(AC, dAC))
 end
 
