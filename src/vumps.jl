@@ -93,14 +93,26 @@ function Optim.retract!(::UniformMPS, AC)
     retractAC!(AC, χ, d)
 end
 
-function Optim.project_tangent!(::UniformMPS, dAC, AC)
-    χ, = size(AC)
-    CC1 = ein"ijk, ijl -> kl"(conj.(AC), AC)
-    CC2 = ein"klm, nlm -> kn"(conj.(AC), AC)
-    temp, = linsolve(ein"ijk, ijl -> kl"(conj.(AC), dAC) .- ein"ijk, ljk -> il"(dAC, conj.(AC)); ishermitian = true, isposdef = true, tol = 1e-14) do x
-        CC1 * x .+ x * transpose(CC2) .- ein"ijk, (ljm, mk) -> li"(conj.(AC), AC, x) .- ein"ijk, (ljm, il) -> km"(conj.(AC), AC, x)
+function Optim.project_tangent!(::UniformMPS, dAC, AC; η = 1e-40)
+    χ, d, = size(AC)
+    U1, S1, V1 = svd(reshape(AC, χ, d * χ))
+    U2, S2, V2 = svd(reshape(AC, χ * d, χ) * U1)
+    U2 .= U2 * V2'
+    V2 .= U1
+    sqrtS1 = sqrt.(S1)
+    invsqrtS1 = inv.(sqrtS1)
+    sqrtS2 = sqrt.(S2)
+    invsqrtS2 = inv.(sqrtS2)
+
+    K1 = Diagonal(invsqrtS1) * (U1' * reshape(dAC, χ, d * χ) * V1) * Diagonal(sqrtS1) # numerical stabilization
+    K2 = Diagonal(invsqrtS2) * (V2' * reshape(dAC, χ * d, χ)' * U2) * Diagonal(sqrtS2) # numerical stabilization
+    temp, = linsolve(K1 .+ K1' .- (K2 .+ K2'); ishermitian = true, isposdef = true, tol = 1e-14) do x
+        dac = reshape(U1 * Diagonal(invsqrtS1) * (x + x') * Diagonal(sqrtS1) * V1', χ, d, χ) .- reshape(U2 * Diagonal(sqrtS2) * (x + x') * Diagonal(invsqrtS2) * V2', χ, d, χ)
+        K1 = Diagonal(invsqrtS1) * (U1' * reshape(dac, χ, d * χ) * V1) * Diagonal(sqrtS1) # numerical stabilization
+        K2 = Diagonal(invsqrtS2) * (V2' * reshape(dac, χ * d, χ)' * U2) * Diagonal(sqrtS2) # numerical stabilization
+        K1 .+ K1' .- (K2 .+ K2')
     end
-    dAC .-= ein"ijk, kl -> ijl"(AC, temp) .- ein"ij, jkl -> ikl"(temp, AC)
+    dAC .-= reshape(U1 * Diagonal(invsqrtS1) * (temp + temp') * Diagonal(sqrtS1) * V1', χ, d, χ) .- reshape(U2 * Diagonal(sqrtS2) * (temp + temp') * Diagonal(invsqrtS2) * V2', χ, d, χ)
     dAC .-= AC .* real(dot(AC, dAC))
 end
 
