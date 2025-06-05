@@ -7,48 +7,31 @@ function polar(A; rev = false)
     end
 end
 
-Zygote.@adjoint function polar(A; rev = false)
+Zygote.@adjoint LinearAlgebra.svd(A) = svd_back(A)
+
+function svd_back(A; η = 1e-40)
     U, S, V = svd(A)
-    if rev
-        d = size(A, 1)
-        P, Q = U * Diagonal(S) * U', U * V'
-        (P, Q), function (Δ)
-            if Δ[2] !== nothing
-                invP = U * Diagonal(inv.(S)) * U'
-                ΔB = Δ[2] * A'
-                ΔA = invP' * Δ[2]
-                ΔP = -invP' * ΔB * invP'
-            else
-                ΔA = zeros(eltype(A), size(A)...)
-                ΔP = zeros(eltype(P), size(P)...)
-            end
+    (U, S, V), function (Δ)
+        ΔA = Δ[2] === nothing ? zeros(eltype(A), size(A)...) : U * Diagonal(Δ[2]) * V'
+        if Δ[1] !== nothing || Δ[3] !== nothing
+            S² = S .^ 2
+            invS = @. S / (S² + η)
+            F = S²' .- S²
+            @. F /= (F ^ 2 + η)
             if Δ[1] !== nothing
-                ΔP += Δ[1]
+                J = F .* (U' * Δ[1])
+                ΔA .+= U * (J .+ J') * Diagonal(S) * V'
+                ΔA .+= (I - U * U') * Δ[1] * Diagonal(invS) * V'
             end
-            ΔAA = sylvester(P, P, -ΔP)
-            ΔA += (ΔAA .+ ΔAA') * A
-            (ΔA,)
+            if Δ[3] !== nothing
+                K = F .* (V' * Δ[3])
+                ΔA .+= U * Diagonal(S) * (K .+ K') * V'
+                L = Diagonal(diag(V' * Δ[3]))
+                ΔA .+= 0.5 .* U * Diagonal(invS) * (L' .- L) * V'
+                ΔA .+= U * Diagonal(invS) * Δ[3]' * (I - V * V')
+            end
         end
-    else
-        d = size(A, 2)
-        Q, P = U * V', V * Diagonal(S) * V'
-        (Q, P), function (Δ)
-            if Δ[1] !== nothing
-                invP = V * Diagonal(inv.(S)) * V'
-                ΔA = Δ[1] * invP'
-                ΔB = A' * Δ[1]
-                ΔP = -invP' * ΔB * invP'
-            else
-                ΔA = zeros(eltype(A), size(A)...)
-                ΔP = zeros(eltype(P), size(P)...)
-            end
-            if Δ[2] !== nothing
-                ΔP += Δ[2]
-            end
-            ΔAA = sylvester(P, P, -ΔP)
-            ΔA += A * (ΔAA .+ ΔAA')
-            (ΔA,)
-        end
+        (ΔA,)
     end
 end
 
@@ -92,34 +75,6 @@ function gauge_fixing(AC)
     U, V * Diagonal(phase)
 end
 
-Zygote.@adjoint LinearAlgebra.svd(A) = svd_back(A)
-
-function svd_back(A; η = 1e-40)
-    U, S, V = svd(A)
-    (U, S, V), function (Δ)
-        ΔA = Δ[2] === nothing ? zeros(eltype(A), size(A)...) : U * Diagonal(Δ[2]) * V'
-        if Δ[1] !== nothing || Δ[3] !== nothing
-            S² = S .^ 2
-            invS = @. S / (S² + η)
-            F = S²' .- S²
-            @. F /= (F ^ 2 + η)
-            if Δ[1] !== nothing
-                J = F .* (U' * Δ[1])
-                ΔA .+= U * (J .+ J') * Diagonal(S) * V'
-                ΔA .+= (I - U * U') * Δ[1] * Diagonal(invS) * V'
-            end
-            if Δ[3] !== nothing
-                K = F .* (V' * Δ[3])
-                ΔA .+= U * Diagonal(S) * (K .+ K') * V'
-                L = Diagonal(diag(V' * Δ[3]))
-                ΔA .+= 0.5 .* U * Diagonal(invS) * (L' .- L) * V'
-                ΔA .+= U * Diagonal(invS) * Δ[3]' * (I - V * V')
-            end
-        end
-        (ΔA,)
-    end
-end
-
 function retractAC!(AC, χ, d) # polar gauge
     AC1 = reshape(AC, χ * d, χ)
     AC2 = Array(reshape(AC, χ, d * χ)')
@@ -145,10 +100,8 @@ end
 function Optim.retract!(::UniformMPS, AC)
     χ, d, = size(AC)
     U, V = gauge_fixing(AC)
-    W = U * V'
-    AC .= ein"ijk, kl -> ijl"(AC, W')
+    AC .= ein"ijk, kl -> ijl"(AC, V * U')
     retractAC!(AC, χ, d)
-    AC .= ein"ijk, kl -> ijl"(AC, W)
 end
 
 function Optim.project_tangent!(::UniformMPS, dAC, AC)
@@ -172,7 +125,7 @@ function AC2AL(AC)
     U, V = gauge_fixing(AC)
     AC2 = ein"ijk, kl -> ijl"(AC, V * U')
     L, = polar(reshape(AC2, χ * d, χ))
-    reshape(L, χ, d, χ)
+    reshape(L, χ, d, χ), AC2
 end
 
 struct MixedCanonicalMPS{T <: Complex}
@@ -239,7 +192,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
     retractAC!(AC, χ, d)
 
     function fg!(F, G, x)
-        val, (dx,) = withgradient(y -> (local_energy(AC2AL(y), y, h)), x)
+        val, (dx,) = withgradient(y -> (local_energy(AC2AL(y)..., h)), x)
         if G !== nothing
             G .= dx
         end
