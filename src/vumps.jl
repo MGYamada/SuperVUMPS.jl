@@ -45,7 +45,7 @@ function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-
     numiter = 1
     while norm(C .- R) > tol && numiter < maxiter
         ALbar = conj.(AL)
-        _, vecs = eigsolve(R, 1, :LR; ishermitian = false, tol = tol, verbosity = 0, kwargs...) do X
+        _, vecs = eigsolve(R, 1, :LR; ishermitian = false, tol = tol, maxiter = 1, verbosity = 0, kwargs...) do X
             ein"(ij, ikl), jkm -> lm"(X, ALbar, A)
         end
         C = vecs[1]
@@ -72,7 +72,7 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     numiter = 1
     while norm(C .- L) > tol && numiter < maxiter
         ARbar = conj.(AR)
-        _, vecs = eigsolve(L, 1, :LR; ishermitian = false, tol = tol, verbosity = 0, kwargs...) do X
+        _, vecs = eigsolve(L, 1, :LR; ishermitian = false, tol = tol, maxiter = 1, verbosity = 0, kwargs...) do X
             ein"mkj, (lki, ji) -> ml"(A, ARbar, X)
         end
         C = vecs[1]
@@ -106,7 +106,7 @@ function AC2AR(x)
     AC = x[:, 1 : end - 1, :]
     C = x[:, end, :]
     _, R1 = polar(reshape(AC, χ, d * χ); rev = true)
-    _, R2 = polar(C)
+    _, R2 = polar(C; rev = true)
     reshape(R2' * R1, χ, d, χ)
 end
 
@@ -131,7 +131,7 @@ function Optim.retract!(::UniformMPS, x)
     x
 end
 
-function Optim.project_tangent!(::UniformMPS, dx, x)
+function Optim.project_tangent!(::UniformMPS, dx, x; tol = 1e-14)
     χ, d, = size(x)
     d -= 1
     AC = x[:, 1 : end - 1, :]
@@ -143,26 +143,27 @@ function Optim.project_tangent!(::UniformMPS, dx, x)
     U2, _, V2 = svd(reshape(AC2, χ, d * χ))
     V2 .= V2 * U2'
     dAC = ein"ij, jkl, lm -> ikm"(U', dx[:, 1 : end - 1, :], V)
-    normdAC = norm(dAC)
     dC = U' * dx[:, end, :] * V
     S² = S .^ 2
     F = inv.(S² .+ S²')
+    dACold = copy(dAC)
+    dCold = copy(dC)
     while true
         L1 = Diagonal(S) * U1' * reshape(dAC, χ * d, χ)
         L2 = Diagonal(S) * dC
-        temp = (L1 .+ L1' .- (L2 .+ L2')) ./ 4
-        if norm(temp) < 1e-14 * normdAC
-            break
-        end
-        h = F .* temp
+        h = F .* ((L1 .+ L1' .- (L2 .+ L2')) ./ 2)
         dAC .-= reshape(U1 * Diagonal(S) * h, χ, d, χ)
         dC .+= Diagonal(S) * h
-
         R1 = reshape(dAC, χ, d * χ) * V2 * Diagonal(S)
         R2 = dC * Diagonal(S)
-        h = F .* ((R1 .+ R1' .- (R2 .+ R2')) ./ 4)
+        h = F .* ((R1 .+ R1' .- (R2 .+ R2')) ./ 2)
         dAC .-= reshape(h * Diagonal(S) * V2', χ, d, χ)
         dC .+= h * Diagonal(S)
+        if norm(dAC .- dACold) / norm(dAC) < tol && norm(dC .- dCold) / norm(dC) < tol
+            break
+        end
+        dACold .= dAC
+        dCold .= dC
     end
     dAC .= ein"ij, jkl, lm -> ikm"(U, dAC, V')
     dC .= U * dC * V'
@@ -237,7 +238,8 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
             return val
         end
     end
-    res = optimize(Optim.only_fg!(fg!), cat(A.AC, reshape(A.C, χ, 1, χ); dims = 2), LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
+    res = optimize(Optim.only_fg!(fg!), cat(A.AC, reshape(A.C, χ, 1, χ); dims = 2), LBFGS(linesearch = BackTracking(), manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
+    # HagerZhang() seems to have some issues with this manifold
 
     y = Optim.minimizer(res)
     AC = y[:, 1 : end - 1, :]
