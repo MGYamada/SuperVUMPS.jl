@@ -1,5 +1,5 @@
 function polar(A; rev = false)
-    U, S, V = svd(A)
+    U, S, V = _svd(A)
     if rev
         U * Diagonal(S) * U', U * V'
     else
@@ -7,7 +7,8 @@ function polar(A; rev = false)
     end
 end
 
-Zygote.@adjoint LinearAlgebra.svd(A) = svd_back(A)
+_svd(A) = svd(A) # to avoid piracy
+Zygote.@adjoint _svd(A) = svd_back(A)
 
 function svd_back(A; η = 1e-40)
     U, S, V = svd(A)
@@ -35,100 +36,143 @@ function svd_back(A; η = 1e-40)
     end
 end
 
-function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...) # fix later
-    D, d, = size(A)
-    Q, R = polar(reshape(C * reshape(A, D, d * D), D * d, D))
-    AL = reshape(Q, D, d, D)
+function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
+    χ, d, = size(A)
+    Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
+    AL = Array(reshape(Q, χ, d, χ))
     λ = norm(R)
-    R /= λ
+    R ./= λ
     numiter = 1
     while norm(C .- R) > tol && numiter < maxiter
-        vals2, vecs2 = eigsolve(R, 1, :LR; ishermitian = false, tol = tol, maxiter = 1, verbosity = 0, kwargs...) do X
-            ein"(ij, ikl), jkm -> lm"(X, conj.(AL), A)
+        ALbar = conj.(AL)
+        _, vecs = eigsolve(R, 1, :LR; ishermitian = false, tol = tol, verbosity = 0, kwargs...) do X
+            ein"(ij, ikl), jkm -> lm"(X, ALbar, A)
         end
-        C = vecs2[1]
+        C = vecs[1]
         _, C = polar(C)
-        Q, R = polar(reshape(C * reshape(A, D, d * D), D * d, D))
-        AL = reshape(Q, D, d, D)
+        Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
+        AL = reshape(Q, χ, d, χ)
         λ = norm(R)
-        R /= λ
+        R ./= λ
         numiter += 1
     end
-    C = R
     if eltype(A) <: Real
-        real.(AL), real.(C), λ
+        real.(AL), real.(R), λ
     else
-        AL, C, λ
+        AL, R, λ
     end
 end
 
-function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, kwargs...) # fix later
-    AL, C, λ = leftorth(ein"ijk -> kji"(A), transpose(C); tol = tol, kwargs...)
-    Array(transpose(C)), ein"ijk -> kji"(AL), λ
+function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
+    χ, d, = size(A)
+    L, Q = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
+    AR = Array(reshape(Q, χ, d, χ))
+    λ = norm(L)
+    L ./= λ
+    numiter = 1
+    while norm(C .- L) > tol && numiter < maxiter
+        ARbar = conj.(AR)
+        _, vecs = eigsolve(L, 1, :LR; ishermitian = false, tol = tol, verbosity = 0, kwargs...) do X
+            ein"mkj, (lki, ji) -> ml"(A, ARbar, X)
+        end
+        C = vecs[1]
+        C, = polar(C; rev = true)
+        L, Q = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
+        AR = reshape(Q, χ, d, χ)
+        λ = norm(L)
+        L ./= λ
+        numiter += 1
+    end
+    if eltype(A) <: Real
+        real.(L), real.(AR), λ
+    else
+        L, AR, λ
+    end
 end
 
-function gauge_fixing(AC)
-    χ, d, = size(AC)
-    U, = svd(reshape(AC, χ, d * χ))
-    _, _, V = svd(reshape(AC, χ * d, χ))
-    phase = map(x -> x / abs(x), diag(V' * U))
-    U, V * Diagonal(phase)
+function AC2AL(x)
+    χ, d, = size(x)
+    d -= 1
+    AC = x[:, 1 : end - 1, :]
+    C = x[:, end, :]
+    L1, = polar(reshape(AC, χ * d, χ))
+    L2, = polar(C)
+    reshape(L1 * L2', χ, d, χ)
 end
 
-function retractAC!(AC, χ, d) # polar gauge
-    AC1 = reshape(AC, χ * d, χ)
-    AC2 = Array(reshape(AC, χ, d * χ)')
-    U, V, Q, D1, D2, R0 = svd(AC1, AC2)
-    X = (R0 * Q') ./ sqrt(2)
-    W, C = polar(X)
-    AL = reshape((U * D1 * W) .* sqrt(2), χ, d, χ)
-    AR = reshape((V * D2 * W)' .* sqrt(2), χ, d, χ)
+function AC2AR(x)
+    χ, d, = size(x)
+    d -= 1
+    AC = x[:, 1 : end - 1, :]
+    C = x[:, end, :]
+    _, R1 = polar(reshape(AC, χ, d * χ); rev = true)
+    _, R2 = polar(C)
+    reshape(R2' * R1, χ, d, χ)
+end
+
+struct UniformMPS <: Manifold end
+
+function Optim.retract!(::UniformMPS, x)
+    χ, d, = size(x)
+    d -= 1
+    AC = x[:, 1 : end - 1, :]
+    C = x[:, end, :]
+    invC = inv(C)
+    AL = ein"ijk, kl -> ijl"(AC, invC)
+    AR = ein"ij, jkl -> ikl"(invC, AC)
     AL, L, = leftorth(AL)
-    AC .= ein"ij, jkl -> ikl"(L, AC)
-    C .= L * C
     R, AR, = rightorth(AR)
-    AC .= ein"ijk, kl -> ijl"(AC, R)
-    C .= C * R
-    U, P = polar(C)
-    AC .= ein"ij, jkl -> ikl"(P, AR)
+    AC .= ein"ij, jkl, lm -> ikm"(L, AC, R)
+    C .= L * C * R
     AC ./= norm(AC)
+    C ./= norm(C)
+    x[:, 1 : end - 1, :] .= AC
+    x[:, end, :] .= C
+    x
 end
 
-struct UniformMPS <: Manifold
-end
+function Optim.project_tangent!(::UniformMPS, dx, x)
+    χ, d, = size(x)
+    d -= 1
+    AC = x[:, 1 : end - 1, :]
+    C = x[:, end, :]
+    U, S, V = svd(C)
+    AC2 = ein"ij, jkl, lm -> ikm"(U', AC, V)
+    U1, _, V1 = svd(reshape(AC2, χ * d, χ))
+    U1 .= U1 * V1'
+    U2, _, V2 = svd(reshape(AC2, χ, d * χ))
+    V2 .= V2 * U2'
+    dAC = ein"ij, jkl, lm -> ikm"(U', dx[:, 1 : end - 1, :], V)
+    normdAC = norm(dAC)
+    dC = U' * dx[:, end, :] * V
+    S² = S .^ 2
+    F = inv.(S² .+ S²')
+    while true
+        L1 = Diagonal(S) * U1' * reshape(dAC, χ * d, χ)
+        L2 = Diagonal(S) * dC
+        temp = (L1 .+ L1' .- (L2 .+ L2')) ./ 4
+        if norm(temp) < 1e-14 * normdAC
+            break
+        end
+        h = F .* temp
+        dAC .-= reshape(U1 * Diagonal(S) * h, χ, d, χ)
+        dC .+= Diagonal(S) * h
 
-function Optim.retract!(::UniformMPS, AC)
-    χ, d, = size(AC)
-    U, V = gauge_fixing(AC)
-    AC .= ein"ijk, kl -> ijl"(AC, V * U')
-    retractAC!(AC, χ, d)
-end
-
-function Optim.project_tangent!(::UniformMPS, dAC, AC)
-    χ, d, = size(AC)
-    U1, _, V1 = svd(reshape(AC, χ, d * χ))
-    U2, _, V2 = svd(reshape(AC, χ * d, χ))
-    K1 = U1' * reshape(dAC, χ, d * χ) * V1
-    K2 = U2' * reshape(dAC, χ * d, χ) * V2
-    temp, = linsolve(diag(K1 .- K2); ishermitian = true, isposdef = true, tol = 1e-14, verbosity = 0) do x
-        dac = reshape(U1 * Diagonal(x) * V1', χ, d, χ) .- reshape(U2 * Diagonal(x) * V2', χ, d, χ)
-        K1 = U1' * reshape(dac, χ, d * χ) * V1
-        K2 = U2' * reshape(dac, χ * d, χ) * V2
-        diag(K1 .- K2) .+ 1e-14 .* x
+        R1 = reshape(dAC, χ, d * χ) * V2 * Diagonal(S)
+        R2 = dC * Diagonal(S)
+        h = F .* ((R1 .+ R1' .- (R2 .+ R2')) ./ 4)
+        dAC .-= reshape(h * Diagonal(S) * V2', χ, d, χ)
+        dC .+= h * Diagonal(S)
     end
-    dAC .-= reshape(U1 * Diagonal(temp) * V1', χ, d, χ) .- reshape(U2 * Diagonal(temp) * V2', χ, d, χ)
+    dAC .= ein"ij, jkl, lm -> ikm"(U, dAC, V')
+    dC .= U * dC * V'
     dAC .-= AC .* real(dot(AC, dAC))
+    dC .-= C .* real(dot(C, dC))
+    dx[:, 1 : end - 1, :] .= dAC
+    dx[:, end, :] .= dC
 end
 
-function AC2AL(AC)
-    χ, d, = size(AC)
-    U, V = gauge_fixing(AC)
-    AC2 = ein"ijk, kl -> ijl"(AC, V * U')
-    L, = polar(reshape(AC2, χ * d, χ))
-    reshape(L, χ, d, χ), AC2
-end
-
-struct MixedCanonicalMPS{T <: Complex}
+struct MixedCanonicalMPS{T}
     AL::Array{T, 3}
     AR::Array{T, 3}
     AC::Array{T, 3}
@@ -154,12 +198,10 @@ function regularize_right(AR, ARbar, C, Cbar, h, χ; tol = 1e-12)
 end
 
 function canonicalMPS(T, χ, d)
-    AC = randn(T, χ, d, χ)
-    retractAC!(AC, χ, d)
-    L, = polar(reshape(AC, χ * d, χ))
-    C, R = polar(reshape(AC, χ, d * χ); rev = true)
-    AL = reshape(L, χ, d, χ)
-    AR = reshape(R, χ, d, χ)
+    A = randn(T, χ, d, χ)
+    AL, = leftorth(A)
+    C, AR, = rightorth(AL)
+    AC = ein"ijk, kl -> ijl"(AL, C)
     MixedCanonicalMPS(AL, AR, AC, C)
 end
 
@@ -186,13 +228,8 @@ end
 
 function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) where T
     χ, d, = size(A.AL)
-    Abar = conjugateMPS(A)
-    U, P = polar(A.C)
-    AC = ein"ij, jkl -> ikl"(P, A.AR) # polar gauge
-    retractAC!(AC, χ, d)
-
     function fg!(F, G, x)
-        val, (dx,) = withgradient(y -> (local_energy(AC2AL(y)..., h)), x)
+        val, (dx,) = withgradient(y -> local_energy(AC2AL(y), y[:, 1 : end - 1, :], h), x)
         if G !== nothing
             G .= dx
         end
@@ -200,13 +237,13 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
             return val
         end
     end
-    res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
+    res = optimize(Optim.only_fg!(fg!), cat(A.AC, reshape(A.C, χ, 1, χ); dims = 2), LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
 
-    AC .= Optim.minimizer(res)
-    L, = polar(reshape(AC, χ * d, χ))
-    C, R = polar(reshape(AC, χ, d * χ); rev = true)
-    AL = reshape(L, χ, d, χ)
-    AR = reshape(R, χ, d, χ)
+    y = Optim.minimizer(res)
+    AC = y[:, 1 : end - 1, :]
+    C = y[:, end, :]
+    AL = AC2AL(y)
+    AR = AC2AR(y)
     A = MixedCanonicalMPS(AL, AR, AC, C)
 
     E = local_energy(A.AL, A.AC, h)
