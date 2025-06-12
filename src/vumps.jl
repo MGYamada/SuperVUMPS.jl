@@ -99,7 +99,7 @@ function gauge_fixing(AC, p)
 end
 
 function svdfix(A; fix = :U)
-    U, S, V = svd(A)
+    U, S, V = _svd(A)
     if fix == :U
         phase = map(x -> x / abs(x), diag(U))
         U = U * Diagonal(phase)'
@@ -110,34 +110,6 @@ function svdfix(A; fix = :U)
         V = V * Diagonal(phase)'
     end
     U, S, V
-end
-
-Zygote.@adjoint svdfix(A; kwargs...) = svdfix_back(A; kwargs...)
-
-function svdfix_back(A; η = 1e-40, kwargs...)
-    U, S, V = svdfix(A; kwargs...)
-    (U, S, V), function (Δ)
-        ΔA = Δ[2] === nothing ? zeros(eltype(A), size(A)...) : U * Diagonal(Δ[2]) * V'
-        if Δ[1] !== nothing || Δ[3] !== nothing
-            S² = S .^ 2
-            invS = @. S / (S² + η)
-            F = S²' .- S²
-            @. F /= (F ^ 2 + η)
-            if Δ[1] !== nothing
-                J = F .* (U' * Δ[1])
-                ΔA .+= U * (J .+ J') * Diagonal(S) * V'
-                ΔA .+= (I - U * U') * Δ[1] * Diagonal(invS) * V'
-            end
-            if Δ[3] !== nothing
-                K = F .* (V' * Δ[3])
-                ΔA .+= U * Diagonal(S) * (K .+ K') * V'
-                L = Diagonal(diag(V' * Δ[3]))
-                ΔA .+= 0.5 .* U * Diagonal(invS) * (L' .- L) * V'
-                ΔA .+= U * Diagonal(invS) * Δ[3]' * (I - V * V')
-            end
-        end
-        (ΔA,)
-    end
 end
 
 struct UniformMPS <: Manifold
@@ -157,7 +129,7 @@ function Optim.retract!(mfd::UniformMPS, x)
     AL, L, = leftorth(AL)
     R, AR, = rightorth(AR)
     C .= L * C * R
-    U, S, = svd(C)
+    U, S, = svdfix(C; fix = :U)
     AL = ein"(ij, jkl), lm -> ikm"(U', AL, U)
     AC = ein"ijk, k -> ijk"(AL, S)
     AC ./= norm(AC)
@@ -260,7 +232,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
             return val
         end
     end
-    U, S, = svd(A.C)
+    U, S, = svdfix(A.C; fix = :U)
     AL = ein"(ij, jkl), lm -> ikm"(U', A.AL, U)
     AC = ein"ijk, k -> ijk"(AL, S)
     res = optimize(Optim.only_fg!(fg!), vcat(vec(AC), ones(eltype(AC), χ)), LBFGS(manifold = UniformMPS(χ, d)), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
