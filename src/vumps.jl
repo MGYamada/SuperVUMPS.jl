@@ -238,15 +238,16 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
     res = optimize(Optim.only_fg!(fg!), vcat(vec(AC), ones(eltype(AC), χ)), LBFGS(manifold = UniformMPS(χ, d)), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
 
     y = Optim.minimizer(res)
-    AC = reshape(y[1 : end - 2χ], χ, d, χ)
-    AL = polar_projection(reshape(y[1 : end - 2χ], χ, d, χ), y[end - 2χ + 1 : end - χ], y[end - χ + 1 : end])
-    # AC = y[:, 1 : end - 1, :]
-    # C = y[:, end, :]
-    # AL = AC2AL(y)
-    # AR = AC2AR(y)
-    # A = MixedCanonicalMPS(AL, AR, AC, C)
+    AC = reshape(y[1 : end - χ], χ, d, χ)
+    p = y[end - χ + 1 : end]
+    U, S, V = gauge_fixing(AC, p)
+    C = U * Diagonal(S) * V'
+    invC = V * Diagonal(inv.(S)) * U'
+    AL = ein"ijk, kl -> ijl"(AC, invC)
+    AR = ein"ij, jkl -> ikl"(invC, AC)
+    A = MixedCanonicalMPS(AL, AR, AC, C)
 
-    E = local_energy(AL, AC, h)
+    E = local_energy(A.AL, A.AC, h)
     if Hamiltonian
         E, A, Hamiltonian_construction(h, A, E; tol = tol)...
     else
