@@ -113,7 +113,7 @@ function svdfix(A; fix = :U)
     U, S, V
 end
 
-function blockmask(S; tol = 1e-2)
+function blockmask(S; tol = 1e-4)
     i = 1
     mask = trues(length(S), length(S))
     while i < length(S)
