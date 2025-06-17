@@ -116,7 +116,7 @@ end
 function blockmask(S; tol = 1e-4)
     i = 1
     mask = trues(length(S), length(S))
-    while i < length(S)
+    while i <= length(S)
         j = length(filter(x -> abs((x - S[i]) / S[i]) < tol, S[i : end]))
         mask[i : i + j - 1, i : i + j - 1] .= false
         i += j
