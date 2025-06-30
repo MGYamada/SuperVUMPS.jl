@@ -90,13 +90,11 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     end
 end
 
-function gauge_fixing(AC, p)
+function gauge_fixing(AC, C)
     χ, d, = size(AC)
-    U, = svdfix(reshape(AC, χ, d * χ); fix = :U)
-    _, _, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
-    C = U * p * V'
-    invC = V * inv(p) * U'
-    C, invC
+    U1, = svdfix(reshape(AC, χ, d * χ); fix = :U)
+    _, _, V1 = svdfix(reshape(AC, χ * d, χ); fix = :V)
+    ein"(ij, jkl), lm -> ikm"(U1', AC, V1), C, U1, V1
 end
 
 function svdfix(A; fix = :U)
@@ -113,7 +111,7 @@ function svdfix(A; fix = :U)
     U, S, V
 end
 
-function blockmask(S; tol = 1e-4)
+function blockmask(S; tol = 1e-8)
     i = 1
     mask = trues(length(S), length(S))
     while i <= length(S)
@@ -130,19 +128,20 @@ function Optim.retract!(::UniformMPS, x)
     χ, d, = size(x)
     d -= 1
     AC = x[:, 1 : end - 1, :]
-    p = x[:, end, :]
-    C, invC = gauge_fixing(AC, p)
+    C = x[:, end, :]
+    AC, C, U1, V1 = gauge_fixing(AC, C)
+    invC = inv(C)
     AL = ein"ijk, kl -> ijl"(AC, invC)
     AR = ein"ij, jkl -> ikl"(invC, AC)
     AL, L, = leftorth(AL)
     R, AR, = rightorth(AR)
-    C .= L * C * R
+    C = L * C * R
     C ./= norm(C)
     U, S, = svdfix(C; fix = :U)
     AL = ein"(ij, jkl), lm -> ikm"(U', AL, U)
     AC = ein"ijk, k -> ijk"(AL, S)
     AC ./= norm(AC)
-    x .= cat(AC, reshape(Diagonal(S), χ, 1, χ); dims = 2)
+    x .= cat(ein"(ij, jkl), lm -> ikm"(U1, AC, V1'), reshape(Diagonal(S), χ, 1, χ); dims = 2)
 end
 
 function Optim.project_tangent!(::UniformMPS, dx, x)
@@ -150,11 +149,11 @@ function Optim.project_tangent!(::UniformMPS, dx, x)
     d -= 1
     AC = x[:, 1 : end - 1, :]
     dAC = dx[:, 1 : end - 1, :]
-    p = x[:, end, :]
-    U0, S, V0 = svd(p)
+    C = x[:, end, :]
+    U0, S, V0 = svd(C)
     mask = blockmask(S)
-    dp = dx[:, end, :]
-    dp[mask] .= 0
+    dC = dx[:, end, :]
+    dC[mask] .= 0
     U1, _, V1 = svd(reshape(AC, χ, d * χ))
     U2, _, V2 = svd(reshape(AC, χ * d, χ))
     M = Matrix{eltype(AC)}(I, 2χ, 2χ)
@@ -164,27 +163,27 @@ function Optim.project_tangent!(::UniformMPS, dx, x)
         M[i + χ, j + χ] -= (transpose(U1[:, j]) * reshape(U2'[i, :], χ, d)) * (reshape(V1'[j, :], d, χ) * V2[:, i])
     end
     M .+= M'
-    K0 = U0' * dp * V0
+    K0 = U0' * dC * V0
     K1 = U1' * reshape(dAC, χ, d * χ) * V1
     K2 = U2' * reshape(dAC, χ * d, χ) * V2
     U, S, V = svd(M)
     temp = V[:, 1 : end - 1] * (Diagonal(inv.(S[1 : end - 1])) * (U'[1 : end - 1, :] * vcat(diag(K0 .- K1), diag(K1 .- K2))))
-    dp .-= U0 * Diagonal(temp[1 : χ]) * V0'
-    dp .-= p .* real(dot(p, dp))
-    dp[mask] .= 0
+    dC .-= U0 * Diagonal(temp[1 : χ]) * V0'
+    dC .-= C .* real(dot(C, dC))
+    dC[mask] .= 0
     dAC .-= reshape(U1 * Diagonal(temp[χ + 1 : end]) * V1', χ, d, χ) .- reshape(U1 * Diagonal(temp[1 : χ]) * V1', χ, d, χ) .- reshape(U2 * Diagonal(temp[χ + 1 : end]) * V2', χ, d, χ)
     dAC .-= AC .* real(dot(AC, dAC))
     dx[:, 1 : end - 1, :] .= dAC
-    dx[:, end, :] .= dp
+    dx[:, end, :] .= dC
     dx
 end
 
-function polar_projection(AC, p)
+function polar_projection(AC, C)
     χ, d, = size(AC)
-    C, = gauge_fixing(AC, p)
+    AC, C, U1, V1 = gauge_fixing(AC, C)
     L1, = polar(reshape(AC, χ * d, χ))
     L2, = polar(C)
-    reshape(L1 * L2', χ, d, χ)
+    AC, reshape(L1 * L2', χ, d, χ), U1, V1
 end
 
 struct MixedCanonicalMPS{T <: Complex}
@@ -241,10 +240,13 @@ function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T
     HAC, HC_rtn
 end
 
-function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) where T
+function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false, β = 1e12) where T
     χ, d, = size(A.AL)
     function fg!(F, G, x)
-        val, (dx,) = withgradient(y -> local_energy(polar_projection(y[:, 1 : end - 1, :], y[:, end, :]), y[:, 1 : end - 1, :], h), x)
+        val, (dx,) = withgradient(x) do y
+            AC, AL, U1, V1 = polar_projection(y[:, 1 : end - 1, :], y[:, end, :])
+            local_energy(AC, AL, h) + β / 2 * (norm(U1 - I) ^ 2 + norm(V1 - I) ^ 2)
+        end
         if G !== nothing
             G .= dx
         end
