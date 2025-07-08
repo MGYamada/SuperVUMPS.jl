@@ -36,6 +36,44 @@ function svd_back(A; η = 1e-40)
     end
 end
 
+ϕ(x) = iszero(x) ? one(x) : x / abs(x)
+
+# function Sinkhorn!(A; tol = 1e-14)
+#     n = size(A, 1)
+#     L = ones(eltype(A), n)
+#     R = ones(eltype(A), n)
+#     sumold = sum(A)
+#     while true
+#         temp = map(x -> ϕ(x)', vec(sum(A; dims = 2)))
+#         L .*= temp
+#         A .= Diagonal(temp) * A
+#         temp = map(x -> ϕ(x)', vec(sum(A; dims = 1)))
+#         R .*= temp
+#         A .= A * Diagonal(temp)
+#         sumnew = sum(A)
+#         if abs(sumnew - sumold) < tol
+#             break
+#         end
+#         sumold = sumnew
+#     end
+#     L, R
+# end
+
+function Sinkhorn!(A)
+    n = size(A, 1)
+    F = [exp(2π * im / n * (i - 1) * (j - 1)) / sqrt(n) for i in 1 : n, j in 1 : n]
+    U = F' * A * F
+    U[1, :] .= 0
+    U[:, 1] .= 0
+    U[1, 1] = 1
+    u, = polar(U[2 : end, 2 : end])
+    U[2 : end, 2 : end] .= u
+    Anew = F * U * F'
+    L = Anew * A'
+    A .= Anew
+    L
+end
+
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
     χ, d, = size(A)
     Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
@@ -92,96 +130,95 @@ end
 
 function gauge_fixing(AC, p)
     χ, d, = size(AC)
-    U, = svdfix(reshape(AC, χ, d * χ); fix = :U)
-    _, _, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
-    C = U * p * V'
-    invC = V * inv(p) * U'
-    C, invC
+    U, S1, = svdfix(reshape(AC, χ, d * χ); fix = :U)
+    _, S2, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
+    S = (S1 .+ S2) ./ 2
+    U * Diagonal(p .* S) * V'
 end
 
 function svdfix(A; fix = :U)
     U, S, V = _svd(A)
     if fix == :U
-        phase = map(x -> x / abs(x), diag(U))
-        U = U * Diagonal(phase)'
-        V = V * Diagonal(phase)'
+        phase = map(x -> ϕ(x)', vec(sum(U; dims = 1)))
+        U = U * Diagonal(phase)
+        V = V * Diagonal(phase)
     elseif fix == :V
-        phase = map(x -> x / abs(x), diag(V))
-        U = U * Diagonal(phase)'
-        V = V * Diagonal(phase)'
+        phase = map(x -> ϕ(x)', vec(sum(V; dims = 1)))
+        U = U * Diagonal(phase)
+        V = V * Diagonal(phase)
     end
     U, S, V
 end
 
-function blockmask(S; tol = 1e-4)
-    i = 1
-    mask = trues(length(S), length(S))
-    while i <= length(S)
-        j = length(filter(x -> abs((x - S[i]) / S[i]) < tol, S[i : end]))
-        mask[i : i + j - 1, i : i + j - 1] .= false
-        i += j
-    end
-    mask
+struct UniformMPS <: Manifold
+    χ::Int
+    d::Int
 end
 
-struct UniformMPS <: Manifold end
-
-function Optim.retract!(::UniformMPS, x)
-    χ, d, = size(x)
-    d -= 1
-    AC = x[:, 1 : end - 1, :]
-    p = x[:, end, :]
-    C, invC = gauge_fixing(AC, p)
+function Optim.retract!(mfd::UniformMPS, x)
+    χ, d = mfd.χ, mfd.d
+    AC = reshape(x[1 : end - χ], χ, d, χ)
+    p = x[end - χ + 1 : end]
+    C = gauge_fixing(AC, ϕ.(p))
+    invC = inv(C) # fix later
     AL = ein"ijk, kl -> ijl"(AC, invC)
     AR = ein"ij, jkl -> ikl"(invC, AC)
     AL, L, = leftorth(AL)
     R, AR, = rightorth(AR)
-    C .= L * C * R
+    C = L * C * R
     C ./= norm(C)
-    U, S, = svdfix(C; fix = :U)
-    AL = ein"(ij, jkl), lm -> ikm"(U', AL, U)
-    AC = ein"ijk, k -> ijk"(AL, S)
-    AC ./= norm(AC)
-    x .= cat(AC, reshape(Diagonal(S), χ, 1, χ); dims = 2)
+    AC = ein"ijk, kl -> ijl"(AL, C)
+    U, = svdfix(reshape(AC, χ, d * χ); fix = :U)
+    _, _, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
+    L1 = Sinkhorn!(U)
+    L2 = Sinkhorn!(V)
+    AC .= ein"(ij, jkl), lm -> ikm"(L1, AC, L2')
+    p .= ϕ.(diag(U' * L1 * C * L2' * V))
+    x .= vcat(vec(AC), p)
 end
 
-function Optim.project_tangent!(::UniformMPS, dx, x)
-    χ, d, = size(x)
-    d -= 1
-    AC = x[:, 1 : end - 1, :]
-    dAC = dx[:, 1 : end - 1, :]
-    p = x[:, end, :]
-    U0, S, V0 = svd(p)
-    mask = blockmask(S)
-    dp = dx[:, end, :]
-    dp[mask] .= 0
-    U1, _, V1 = svd(reshape(AC, χ, d * χ))
-    U2, _, V2 = svd(reshape(AC, χ * d, χ))
-    M = Matrix{eltype(AC)}(I, 2χ, 2χ)
-    M[1 : χ, χ + 1 : end] .-= Matrix{eltype(AC)}(I, χ, χ)
-    for i in 1 : χ, j in 1 : χ
-        M[i + χ, j] += (transpose(U1[:, j]) * reshape(U2'[i, :], χ, d)) * (reshape(V1'[j, :], d, χ) * V2[:, i])
-        M[i + χ, j + χ] -= (transpose(U1[:, j]) * reshape(U2'[i, :], χ, d)) * (reshape(V1'[j, :], d, χ) * V2[:, i])
+function Optim.project_tangent!(mfd::UniformMPS, dx, x; η = 1e-40)
+    # O(χ⁴) algorithm by M. G. Yamada
+    χ, d = mfd.χ, mfd.d
+    AC = reshape(x[1 : end - χ], χ, d, χ)
+    U1, S1, V1 = svdfix(reshape(AC, χ, d * χ); fix = :U)
+    println(S1)
+    U2, S2, V2 = svdfix(reshape(AC, χ * d, χ); fix = :V)
+    S = (S1 .+ S2) ./ 2
+    dAC = reshape(dx[1 : end - χ], χ, d, χ)
+    S² = S .^ 2
+    F = S²' .- S²
+    @. F /= (F ^ 2 + η)
+    dU1 = U1 * (F .* (x -> x .+ x')(U1' * reshape(dAC, χ, d * χ) * V1 * Diagonal(S)))
+    dU1 .-= U1 * Diagonal(im .* imag.(vec(sum(dU1; dims = 1))))
+    dV2 = V2 * (F .* (x -> x .+ x')(Diagonal(S) * U2' * reshape(dAC, χ * d, χ) * V2))
+    dV2 .-= V2 * Diagonal(im .* imag.(vec(sum(dV2; dims = 1))))
+    x = vcat(real.(diag(U1' * reshape(dAC, χ, d * χ) * V1 .- U2' * reshape(dAC, χ * d, χ) * V2)), real.(vec(sum(dU1; dims = 1))), real.(vec(sum(dV2; dims = 1))))
+    A = zeros(3χ, 3χ)
+    function a(x)
+        dac = reshape(U1 * ((x -> x .+ x')(F .* (U1' * transpose(reshape(repeat(x[χ + 1 : 2χ], χ), χ, χ)))) * Diagonal(S) .+ Diagonal(x[1 : χ])) * V1', χ, d, χ) .+ reshape(U2 * (Diagonal(S) * (x -> x .+ x')(F .* (V2' * transpose(reshape(repeat(x[2χ + 1 : end], χ), χ, χ)))) .- Diagonal(x[1 : χ])) * V2', χ, d, χ)
+        du1 = U1 * (F .* (x -> x .+ x')(U1' * reshape(dac, χ, d * χ) * V1 * Diagonal(S)))
+        du1 .-= U1 * Diagonal(im .* imag.(vec(sum(du1; dims = 1))))
+        dv2 = V2 * (F .* (x -> x .+ x')(Diagonal(S) * U2' * reshape(dac, χ * d, χ) * V2))
+        dv2 .-= V2 * Diagonal(im .* imag.(vec(sum(dv2; dims = 1))))
+        vcat(real.(diag(U1' * reshape(dac, χ, d * χ) * V1 .- U2' * reshape(dac, χ * d, χ) * V2)), real.(vec(sum(du1; dims = 1))), real.(vec(sum(dv2; dims = 1))))
     end
-    M .+= M'
-    K0 = U0' * dp * V0
-    K1 = U1' * reshape(dAC, χ, d * χ) * V1
-    K2 = U2' * reshape(dAC, χ * d, χ) * V2
-    U, S, V = svd(M)
-    temp = V[:, 1 : end - 1] * (Diagonal(inv.(S[1 : end - 1])) * (U'[1 : end - 1, :] * vcat(diag(K0 .- K1), diag(K1 .- K2))))
-    dp .-= U0 * Diagonal(temp[1 : χ]) * V0'
-    dp .-= p .* real(dot(p, dp))
-    dp[mask] .= 0
-    dAC .-= reshape(U1 * Diagonal(temp[χ + 1 : end]) * V1', χ, d, χ) .- reshape(U1 * Diagonal(temp[1 : χ]) * V1', χ, d, χ) .- reshape(U2 * Diagonal(temp[χ + 1 : end]) * V2', χ, d, χ)
+    for i in 1 : 3χ
+        A[:, i] .= a(Matrix{Float64}(I, 3χ, 3χ)[:, i])
+    end
+    U, s, V = svd(A)
+    temp = V[:, 1 : end - 3] * (Diagonal(inv.(s[1 : end - 3])) * (U[:, 1 : end - 3]' * x))
+    dAC .-= reshape(U1 * ((x -> x .+ x')(F .* (U1' * transpose(reshape(repeat(temp[χ + 1 : 2χ], χ), χ, χ)))) * Diagonal(S) .+ Diagonal(temp[1 : χ])) * V1', χ, d, χ) .+ reshape(U2 * (Diagonal(S) * (x -> x .+ x')(F .* (V2' * transpose(reshape(repeat(temp[2χ + 1 : end], χ), χ, χ)))) .- Diagonal(temp[1 : χ])) * V2', χ, d, χ)
     dAC .-= AC .* real(dot(AC, dAC))
-    dx[:, 1 : end - 1, :] .= dAC
-    dx[:, end, :] .= dp
+    dx[1 : end - χ] .= vec(dAC)
+    p = x[end - χ + 1 : end]
+    @. dx[end - χ + 1 : end] -= p * real(conj(p) * dx[end - χ + 1 : end])
     dx
 end
 
 function polar_projection(AC, p)
     χ, d, = size(AC)
-    C, = gauge_fixing(AC, p)
+    C = gauge_fixing(AC, p)
     L1, = polar(reshape(AC, χ * d, χ))
     L2, = polar(C)
     reshape(L1 * L2', χ, d, χ)
@@ -244,7 +281,7 @@ end
 function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) where T
     χ, d, = size(A.AL)
     function fg!(F, G, x)
-        val, (dx,) = withgradient(y -> local_energy(polar_projection(y[:, 1 : end - 1, :], y[:, end, :]), y[:, 1 : end - 1, :], h), x)
+        val, (dx,) = withgradient(y -> local_energy(polar_projection(reshape(y[1 : end - χ], χ, d, χ), y[end - χ + 1 : end]), reshape(y[1 : end - χ], χ, d, χ), h), x)
         if G !== nothing
             G .= dx
         end
@@ -255,7 +292,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
     U, S, = svdfix(A.C; fix = :U)
     AL = ein"(ij, jkl), lm -> ikm"(U', A.AL, U)
     AC = ein"ijk, k -> ijk"(AL, S)
-    res = optimize(Optim.only_fg!(fg!), cat(AC, reshape(Diagonal(S), χ, 1, χ); dims = 2), LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
+    res = optimize(Optim.only_fg!(fg!), vcat(vec(AC), ones(eltype(AC), χ)), LBFGS(manifold = UniformMPS(χ, d)), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
 
     y = Optim.minimizer(res)
     AC = y[:, 1 : end - 1, :]
