@@ -182,7 +182,6 @@ function Optim.project_tangent!(mfd::UniformMPS, dx, x; η = 1e-40)
     χ, d = mfd.χ, mfd.d
     AC = reshape(x[1 : end - χ], χ, d, χ)
     U1, S1, V1 = svdfix(reshape(AC, χ, d * χ); fix = :U)
-    println(S1)
     U2, S2, V2 = svdfix(reshape(AC, χ * d, χ); fix = :V)
     S = (S1 .+ S2) ./ 2
     dAC = reshape(dx[1 : end - χ], χ, d, χ)
