@@ -177,7 +177,7 @@ function Optim.retract!(mfd::UniformMPS, x)
     x .= vcat(vec(AC), p)
 end
 
-function Optim.project_tangent!(mfd::UniformMPS, dx, x; η = 1e-40)
+function Optim.project_tangent!(mfd::UniformMPS, dx, x; η = 1e-2)
     # O(χ⁴) algorithm by M. G. Yamada
     χ, d = mfd.χ, mfd.d
     AC = reshape(x[1 : end - χ], χ, d, χ)
@@ -294,9 +294,10 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
     res = optimize(Optim.only_fg!(fg!), vcat(vec(AC), ones(eltype(AC), χ)), LBFGS(manifold = UniformMPS(χ, d)), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
 
     y = Optim.minimizer(res)
-    AC = y[:, 1 : end - 1, :]
-    p = y[:, end, :]
-    C, invC = gauge_fixing(AC, p)
+    AC = reshape(y[1 : end - χ], χ, d, χ)
+    p = y[end - χ + 1 : end]
+    C = gauge_fixing(AC, p)
+    invC = inv(C)
     AL = ein"ijk, kl -> ijl"(AC, invC)
     AR = ein"ij, jkl -> ikl"(invC, AC)
     A = MixedCanonicalMPS(AL, AR, AC, C)
