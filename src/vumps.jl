@@ -177,7 +177,7 @@ function Optim.retract!(mfd::UniformMPS, x)
     x .= vcat(vec(AC), p)
 end
 
-function Optim.project_tangent!(mfd::UniformMPS, dx, x; η = 1e-2)
+function Optim.project_tangent!(mfd::UniformMPS, dx, x; η = 1e-4)
     # O(χ⁴) algorithm by M. G. Yamada
     χ, d = mfd.χ, mfd.d
     AC = reshape(x[1 : end - χ], χ, d, χ)
