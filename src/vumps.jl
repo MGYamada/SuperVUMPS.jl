@@ -128,12 +128,12 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     end
 end
 
-function gauge_fixing(AC, p)
+function gauge_fixing(AC)
     χ, d, = size(AC)
     U, S1, = svdfix(reshape(AC, χ, d * χ); fix = :U)
     _, S2, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
     S = (S1 .+ S2) ./ 2
-    U * Diagonal(p .* S) * V'
+    U * Diagonal(S) * V'
 end
 
 function svdfix(A; fix = :U)
@@ -150,16 +150,11 @@ function svdfix(A; fix = :U)
     U, S, V
 end
 
-struct UniformMPS <: Manifold
-    χ::Int
-    d::Int
-end
+struct UniformMPS <: Manifold end
 
-function Optim.retract!(mfd::UniformMPS, x)
-    χ, d = mfd.χ, mfd.d
-    AC = reshape(x[1 : end - χ], χ, d, χ)
-    p = x[end - χ + 1 : end]
-    C = gauge_fixing(AC, ϕ.(p))
+function Optim.retract!(::UniformMPS, AC)
+    χ, d, = size(AC)
+    C = gauge_fixing(AC)
     invC = inv(C) # fix later
     AL = ein"ijk, kl -> ijl"(AC, invC)
     AR = ein"ij, jkl -> ikl"(invC, AC)
@@ -167,24 +162,20 @@ function Optim.retract!(mfd::UniformMPS, x)
     R, AR, = rightorth(AR)
     C = L * C * R
     C ./= norm(C)
-    AC = ein"ijk, kl -> ijl"(AL, C)
-    U, = svdfix(reshape(AC, χ, d * χ); fix = :U)
-    _, _, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
+    AC .= ein"ijk, kl -> ijl"(AL, C)
+    U, _, V = svdfix(C; fix = :U)
     L1 = Sinkhorn!(U)
     L2 = Sinkhorn!(V)
     AC .= ein"(ij, jkl), lm -> ikm"(L1, AC, L2')
-    p .= ϕ.(diag(U' * L1 * C * L2' * V))
-    x .= vcat(vec(AC), p)
 end
 
-function Optim.project_tangent!(mfd::UniformMPS, dx, x; η = 1e-4)
+function Optim.project_tangent!(::UniformMPS, dAC, AC; η = 1e-40)
     # O(χ⁴) algorithm by M. G. Yamada
-    χ, d = mfd.χ, mfd.d
-    AC = reshape(x[1 : end - χ], χ, d, χ)
+    χ, d, = size(AC)
+    Optim.retract!(UniformMPS(), AC)
     U1, S1, V1 = svdfix(reshape(AC, χ, d * χ); fix = :U)
     U2, S2, V2 = svdfix(reshape(AC, χ * d, χ); fix = :V)
     S = (S1 .+ S2) ./ 2
-    dAC = reshape(dx[1 : end - χ], χ, d, χ)
     S² = S .^ 2
     F = S²' .- S²
     @. F /= (F ^ 2 + η)
@@ -209,15 +200,11 @@ function Optim.project_tangent!(mfd::UniformMPS, dx, x; η = 1e-4)
     temp = V[:, 1 : end - 3] * (Diagonal(inv.(s[1 : end - 3])) * (U[:, 1 : end - 3]' * x))
     dAC .-= reshape(U1 * ((x -> x .+ x')(F .* (U1' * transpose(reshape(repeat(temp[χ + 1 : 2χ], χ), χ, χ)))) * Diagonal(S) .+ Diagonal(temp[1 : χ])) * V1', χ, d, χ) .+ reshape(U2 * (Diagonal(S) * (x -> x .+ x')(F .* (V2' * transpose(reshape(repeat(temp[2χ + 1 : end], χ), χ, χ)))) .- Diagonal(temp[1 : χ])) * V2', χ, d, χ)
     dAC .-= AC .* real(dot(AC, dAC))
-    dx[1 : end - χ] .= vec(dAC)
-    p = x[end - χ + 1 : end]
-    @. dx[end - χ + 1 : end] -= p * real(conj(p) * dx[end - χ + 1 : end])
-    dx
 end
 
-function polar_projection(AC, p)
+function polar_projection(AC)
     χ, d, = size(AC)
-    C = gauge_fixing(AC, p)
+    C = gauge_fixing(AC)
     L1, = polar(reshape(AC, χ * d, χ))
     L2, = polar(C)
     reshape(L1 * L2', χ, d, χ)
@@ -280,7 +267,7 @@ end
 function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) where T
     χ, d, = size(A.AL)
     function fg!(F, G, x)
-        val, (dx,) = withgradient(y -> local_energy(polar_projection(reshape(y[1 : end - χ], χ, d, χ), y[end - χ + 1 : end]), reshape(y[1 : end - χ], χ, d, χ), h), x)
+        val, (dx,) = withgradient(y -> local_energy(polar_projection(y), y, h), x)
         if G !== nothing
             G .= dx
         end
@@ -291,12 +278,10 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
     U, S, = svdfix(A.C; fix = :U)
     AL = ein"(ij, jkl), lm -> ikm"(U', A.AL, U)
     AC = ein"ijk, k -> ijk"(AL, S)
-    res = optimize(Optim.only_fg!(fg!), vcat(vec(AC), ones(eltype(AC), χ)), LBFGS(manifold = UniformMPS(χ, d)), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
+    res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
 
-    y = Optim.minimizer(res)
-    AC = reshape(y[1 : end - χ], χ, d, χ)
-    p = y[end - χ + 1 : end]
-    C = gauge_fixing(AC, p)
+    AC = Optim.minimizer(res)
+    C = gauge_fixing(AC)
     invC = inv(C)
     AL = ein"ijk, kl -> ijl"(AC, invC)
     AR = ein"ij, jkl -> ikl"(invC, AC)
