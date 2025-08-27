@@ -38,27 +38,6 @@ end
 
 ϕ(x) = iszero(x) ? one(x) : x / abs(x)
 
-# function Sinkhorn!(A; tol = 1e-14)
-#     n = size(A, 1)
-#     L = ones(eltype(A), n)
-#     R = ones(eltype(A), n)
-#     sumold = sum(A)
-#     while true
-#         temp = map(x -> ϕ(x)', vec(sum(A; dims = 2)))
-#         L .*= temp
-#         A .= Diagonal(temp) * A
-#         temp = map(x -> ϕ(x)', vec(sum(A; dims = 1)))
-#         R .*= temp
-#         A .= A * Diagonal(temp)
-#         sumnew = sum(A)
-#         if abs(sumnew - sumold) < tol
-#             break
-#         end
-#         sumold = sumnew
-#     end
-#     L, R
-# end
-
 function Sinkhorn!(A)
     n = size(A, 1)
     F = [exp(2π * im / n * (i - 1) * (j - 1)) / sqrt(n) for i in 1 : n, j in 1 : n]
@@ -72,6 +51,22 @@ function Sinkhorn!(A)
     L = Anew * A'
     A .= Anew
     L
+end
+
+function Sinkhorn(A; tol = 1e-14)
+    # sumold = sum(A)
+    for i in 1:100
+        temp = map(x -> ϕ(x)', vec(sum(A; dims = 2)))
+        A = Diagonal(temp) * A
+        temp = map(x -> ϕ(x)', vec(sum(A; dims = 1)))
+        A = A * Diagonal(temp)
+        # sumnew = sum(A)
+        # if abs(sumnew - sumold) < tol
+        #     break
+        # end
+        # sumold = sumnew
+    end
+    A
 end
 
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
@@ -133,7 +128,7 @@ function gauge_fixing(AC)
     U, S1, = svdfix(reshape(AC, χ, d * χ); fix = :U)
     _, S2, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
     S = (S1 .+ S2) ./ 2
-    U * Diagonal(S) * V'
+    U, S, V
 end
 
 function svdfix(A; fix = :U)
@@ -154,8 +149,9 @@ struct UniformMPS <: Manifold end
 
 function Optim.retract!(::UniformMPS, AC)
     χ, d, = size(AC)
-    C = gauge_fixing(AC)
-    invC = inv(C) # fix later
+    U, S, V = gauge_fixing(AC)
+    C = U * Diagonal(S) * V'
+    invC = V * Diagonal(inv.(S)) * U'
     AL = ein"ijk, kl -> ijl"(AC, invC)
     AR = ein"ij, jkl -> ikl"(invC, AC)
     AL, L, = leftorth(AL)
@@ -172,7 +168,6 @@ end
 function Optim.project_tangent!(::UniformMPS, dAC, AC; η = 1e-40)
     # O(χ⁴) algorithm by M. G. Yamada
     χ, d, = size(AC)
-    Optim.retract!(UniformMPS(), AC)
     U1, S1, V1 = svdfix(reshape(AC, χ, d * χ); fix = :U)
     U2, S2, V2 = svdfix(reshape(AC, χ * d, χ); fix = :V)
     S = (S1 .+ S2) ./ 2
@@ -204,7 +199,8 @@ end
 
 function polar_projection(AC)
     χ, d, = size(AC)
-    C = gauge_fixing(AC)
+    U, S, V = gauge_fixing(AC)
+    C = Sinkhorn(U) * Diagonal(S) * Sinkhorn(V)'
     L1, = polar(reshape(AC, χ * d, χ))
     L2, = polar(C)
     reshape(L1 * L2', χ, d, χ)
