@@ -270,7 +270,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 100, Hamiltonian = false, hybr
         A = MixedCanonicalMPS(AL, AR, AC, C)
     end
 
-    R .= AL2R(A.AL, Matrix{eltype(A.AL)}(I, χ, χ))
+    R = AL2R(A.AL, Matrix{eltype(A.AL)}(I, χ, χ))
     E = real(local_energy(A.AL, R, h) / tr(R))
     if Hamiltonian
         E, A, R, Hamiltonian_construction(h, A, E; tol = tol)...
