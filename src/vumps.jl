@@ -168,7 +168,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
     A = MixedCanonicalMPS(AL, AR, AC, C)
 
     R .= AL2R(A.AL, R)
-    E = local_energy(A.AL, R, h)
+    E = real(local_energy(A.AL, R, h) / tr(R))
     if Hamiltonian
         E, A, Hamiltonian_construction(h, A, E; tol = tol)...
     else
