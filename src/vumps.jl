@@ -261,7 +261,13 @@ function svumps(h::T, A; tol = 1e-8, iterations = 100, Hamiltonian = false, hybr
                 return val
             end
         end
-        res = optimize(Optim.only_fg!(fg2!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_tol = tol, allow_f_increases = true, iterations = iterations))
+        res = optimize(Optim.only_fg!(fg2!), AC, LBFGS(manifold = UniformMPS(), linesearch = BackTracking()), Optim.Options(g_tol = tol, allow_f_increases = true, iterations = iterations))
+        AC .= Optim.minimizer(res)
+        L, = polar(reshape(AC, χ * d, χ))
+        C, R = polar(reshape(AC, χ, d * χ); rev = true)
+        AL = reshape(L, χ, d, χ)
+        AR = reshape(R, χ, d, χ)
+        A = MixedCanonicalMPS(AL, AR, AC, C)
     end
 
     R .= AL2R(A.AL, R)
