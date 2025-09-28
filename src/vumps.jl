@@ -7,6 +7,34 @@ function polar(A; rev = false)
     end
 end
 
+Zygote.@adjoint LinearAlgebra.svd(A) = svd_back(A)
+
+function svd_back(A; η = 1e-40)
+    U, S, V = svd(A)
+    (U, S, V), function (Δ)
+        ΔA = Δ[2] === nothing ? zeros(eltype(A), size(A)...) : U * Diagonal(Δ[2]) * V'
+        if Δ[1] !== nothing || Δ[3] !== nothing
+            S² = S .^ 2
+            invS = @. S / (S² + η)
+            F = S²' .- S²
+            @. F /= (F ^ 2 + η)
+            if Δ[1] !== nothing
+                J = F .* (U' * Δ[1])
+                ΔA .+= U * (J .+ J') * Diagonal(S) * V'
+                ΔA .+= (I - U * U') * Δ[1] * Diagonal(invS) * V'
+            end
+            if Δ[3] !== nothing
+                K = F .* (V' * Δ[3])
+                ΔA .+= U * Diagonal(S) * (K .+ K') * V'
+                L = Diagonal(diag(V' * Δ[3]))
+                ΔA .+= 0.5 .* U * Diagonal(invS) * (L' .- L) * V'
+                ΔA .+= U * Diagonal(invS) * Δ[3]' * (I - V * V')
+            end
+        end
+        (ΔA,)
+    end
+end
+
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
     χ, d, = size(A)
     Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
@@ -59,6 +87,54 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     else
         L, AR, λ
     end
+end
+
+function retractAC!(AC, χ, d)
+    AC1 = reshape(AC, χ * d, χ)
+    AC2 = Array(reshape(AC, χ, d * χ)')
+    U, V, Q, D1, D2, R0 = svd(AC1, AC2)
+    X = (R0 * Q') ./ sqrt(2)
+    W, C = polar(X)
+    AL = reshape((U * D1 * W) .* sqrt(2), χ, d, χ)
+    AR = reshape((V * D2 * W)' .* sqrt(2), χ, d, χ)
+    AL, L, = leftorth(AL)
+    AC .= ein"ij, jkl -> ikl"(L, AC)
+    C .= L * C
+    R, AR, = rightorth(AR)
+    AC .= ein"ijk, kl -> ijl"(AC, R)
+    C .= C * R
+    U, P = polar(C)
+    AC .= ein"ij, jkl -> ikl"(P, AR)
+    AC ./= norm(AC)
+end
+
+struct UniformMPS <: Manifold end
+
+function Optim.retract!(::UniformMPS, AC)
+    χ, d, = size(AC)
+    retractAC!(AC, χ, d)
+end
+
+function Optim.project_tangent!(::UniformMPS, dAC, AC)
+    χ, d, = size(AC)
+    U1, S1, V1 = svd(reshape(AC, χ, d * χ))
+    U2, S2, V2 = svd(reshape(AC, χ * d, χ) * U1)
+    U2 .= U2 * V2'
+    V2 .= U1
+    sqrtS1 = sqrt.(S1)
+    invsqrtS1 = inv.(sqrtS1)
+    sqrtS2 = sqrt.(S2)
+    invsqrtS2 = inv.(sqrtS2)
+    K1 = Diagonal(invsqrtS1) * (U1' * reshape(dAC, χ, d * χ) * V1) * Diagonal(sqrtS1)
+    K2 = Diagonal(invsqrtS2) * (V2' * reshape(dAC, χ * d, χ)' * U2) * Diagonal(sqrtS2)
+    temp, = linsolve(K1 .+ K1' .- (K2 .+ K2'); ishermitian = true, isposdef = true, tol = 1e-14) do x
+        dac = reshape(U1 * (Diagonal(invsqrtS1) * (x + x') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (x + x') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
+        K1 = Diagonal(invsqrtS1) * (U1' * reshape(dac, χ, d * χ) * V1) * Diagonal(sqrtS1)
+        K2 = Diagonal(invsqrtS2) * (V2' * reshape(dac, χ * d, χ)' * U2) * Diagonal(sqrtS2)
+        K1 .+ K1' .- (K2 .+ K2')
+    end
+    dAC .-= reshape(U1 * (Diagonal(invsqrtS1) * (temp + temp') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (temp + temp') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
+    dAC .-= AC .* real(dot(AC, dAC))
 end
 
 struct MixedCanonicalMPS{T <: Complex}
@@ -126,9 +202,13 @@ function AL2R(AL, R)
     R
 end
 
-local_energy(AL, R, h::Array{T, 4}) where T = ein"ijk, (klm, (jlno, (inp, (poq, mq)))) -> "(conj.(AL), conj.(AL), h, AL, AL, R)[]
-local_energy(AL, R, h::Array{T, 6}) where T = ein"ijk, (klm, (mno, (jlnpqr, (ips, (sqt, (tru, ou)))))) -> "(conj.(AL), conj.(AL), conj.(AL), h, AL, AL, AL, R)[]
-local_energy(AL, R, h::Array{T, 8}) where T = ein"ijk, (klm, (mno, (opq, (jlnprstu, (irv, (vsw, (wtx, (xuy, qy)))))))) -> "(conj.(AL), conj.(AL), conj.(AL), conj.(AL), h, AL, AL, AL, AL, R)[]
+local_energy(AL, R::Matrix{T}, h::Array{T, 4}) where T = ein"ijk, (klm, (jlno, (inp, (poq, mq)))) -> "(conj.(AL), conj.(AL), h, AL, AL, R)[]
+local_energy(AL, R::Matrix{T}, h::Array{T, 6}) where T = ein"ijk, (klm, (mno, (jlnpqr, (ips, (sqt, (tru, ou)))))) -> "(conj.(AL), conj.(AL), conj.(AL), h, AL, AL, AL, R)[]
+local_energy(AL, R::Matrix{T}, h::Array{T, 8}) where T = ein"ijk, (klm, (mno, (opq, (jlnprstu, (irv, (vsw, (wtx, (xuy, qy)))))))) -> "(conj.(AL), conj.(AL), conj.(AL), conj.(AL), h, AL, AL, AL, AL, R)[]
+
+local_energy(AL, AC::Array{T, 3}, h::Array{T, 4}) where T = ein"ijk, (klm, (jlno, (inp, pom))) -> "(conj.(AL), conj.(AC), h, AL, AC)[]
+local_energy(AL, AC::Array{T, 3}, h::Array{T, 6}) where T = ein"ijk, (klm, (mno, (jlnpqr, (ips, (sqt, tro))))) -> "(conj.(AL), conj.(AL), conj.(AC), h, AL, AL, AC)[]
+local_energy(AL, AC::Array{T, 3}, h::Array{T, 8}) where T = ein"ijk, (klm, (mno, (opq, (jlnprstu, (irv, (vsw, (wtx, xuq))))))) -> "(conj.(AL), conj.(AL), conj.(AL), conj.(AC), h, AL, AL, AL, AC)[]
 
 function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T
     χ, d, = size(A.AL)
@@ -145,7 +225,7 @@ function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T
     HAC, HC_rtn
 end
 
-function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) where T
+function svumps(h::T, A; tol = 1e-8, iterations = 100, Hamiltonian = false, hybrid = true) where T
     χ, d, = size(A.AL)
     R = Matrix{eltype(A.AL)}(I, χ, χ)
     function fg!(F, G, x)
@@ -166,6 +246,23 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
     C, AR, = rightorth(AL)
     AC = ein"ijk, kl -> ijl"(AL, C)
     A = MixedCanonicalMPS(AL, AR, AC, C)
+
+    if hybrid
+        U, P = polar(A.C)
+        AC = ein"ij, jkl -> ikl"(P, A.AR) # polar gauge
+        retractAC!(AC, χ, d)
+
+        function fg!(F, G, x)
+            val, (dx,) = withgradient(y -> real(local_energy(reshape(polar(reshape(y, χ * d, χ))[1], χ, d, χ), y, h)), x)
+            if G !== nothing
+                G .= dx
+            end
+            if F !== nothing
+                return val
+            end
+        end
+        res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_tol = tol, allow_f_increases = true, iterations = iterations))
+    end
 
     R .= AL2R(A.AL, R)
     E = real(local_energy(A.AL, R, h) / tr(R))
