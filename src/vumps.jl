@@ -160,7 +160,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
             return val
         end
     end
-    res = optimize(Optim.only_fg!(fg!), reshape(A.AL, χ * d, χ), LBFGS(manifold = Stiefel()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
+    res = optimize(Optim.only_fg!(fg!), reshape(A.AL, χ * d, χ), LBFGS(manifold = Stiefel(), linesearch = Static()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
 
     AL = Array(reshape(Optim.minimizer(res), χ, d, χ))
     C, AR, = rightorth(AL)
