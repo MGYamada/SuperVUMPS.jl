@@ -252,7 +252,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 100, Hamiltonian = false, hybr
         AC = ein"ij, jkl -> ikl"(P, A.AR) # polar gauge
         retractAC!(AC, χ, d)
 
-        function fg!(F, G, x)
+        function fg2!(F, G, x)
             val, (dx,) = withgradient(y -> real(local_energy(reshape(polar(reshape(y, χ * d, χ))[1], χ, d, χ), y, h)), x)
             if G !== nothing
                 G .= dx
@@ -261,7 +261,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 100, Hamiltonian = false, hybr
                 return val
             end
         end
-        res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_tol = tol, allow_f_increases = true, iterations = iterations))
+        res = optimize(Optim.only_fg!(fg2!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_tol = tol, allow_f_increases = true, iterations = iterations))
     end
 
     R .= AL2R(A.AL, R)
