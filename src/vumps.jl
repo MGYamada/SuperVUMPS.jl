@@ -170,18 +170,18 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
     R .= AL2R(A.AL, R)
     E = real(local_energy(A.AL, R, h) / tr(R))
     if Hamiltonian
-        E, A, Hamiltonian_construction(h, A, E; tol = tol)...
+        E, A, R, Hamiltonian_construction(h, A, E; tol = tol)...
     else
-        E, A
+        E, A, R
     end
 end
 
 Zygote.@adjoint function svumps(h, A; kwargs...)
     X = svumps(h, A; kwargs...)
-    _, A, = X
+    _, A, R, = X
     X, function (Δ)
         if all(Δ[2 : end] .=== nothing)
-            _, back = pullback(x -> local_energy(A.AL, A.AC, x), h)
+            _, back = pullback(x -> real(local_energy(A.AL, R, x) / tr(R)), h)
             (back(Δ[1])[1], nothing)
         else
             error("MPS/effective Hamiltonian differentiation not supported")
