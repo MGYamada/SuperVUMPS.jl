@@ -322,7 +322,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 100, Hamiltonian = false, hybr
 
     if hybrid
         function fg2!(F, G, x)
-            val, (dx,) = withgradient(y -> local_energy(polar_projection(y), y, h), x)
+            val, (dx,) = withgradient(y -> real(local_energy(polar_projection(y), y, h)), x)
             if G !== nothing
                 G .= dx
             end
