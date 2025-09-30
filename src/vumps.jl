@@ -71,7 +71,7 @@ end
 function Optim.project_tangent!(::CanonicalMPS, dAL, AL)
     χ, d, = size(AL)
     C, = rightorth(AL)
-    X = ein"ijk, kl -> ijl"(AL, C)
+    X = reshape(ein"ijk, kl -> ijl"(AL, C), χ * d, χ)
     dAC = ein"ijk, kl -> ijl"(dAL, C)
     G = reshape(dAC, χ * d, χ)
     XG = X' * G
