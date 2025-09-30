@@ -241,10 +241,10 @@ end
 
 Zygote.@adjoint function svumps(h, A; kwargs...)
     X = svumps(h, A; kwargs...)
-    _, A, R, = X
+    _, A, = X
     X, function (Δ)
         if all(Δ[2 : end] .=== nothing)
-            _, back = pullback(x -> real(local_energy(A.AL, R, x) / tr(R)), h)
+            _, back = pullback(x -> real(local_energy(A.AL, A.AC, h)), h)
             (back(Δ[1])[1], nothing)
         else
             error("MPS/effective Hamiltonian differentiation not supported")
