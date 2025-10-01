@@ -36,6 +36,44 @@ function svd_back(A; η = 1e-40)
     end
 end
 
+ϕ(x) = iszero(x) ? one(x) : x / abs(x)
+
+function Sinkhorn(A; tol = 1e-14)
+    n = size(A, 1)
+    L = ones(eltype(A), n)
+    R = ones(eltype(A), n)
+    sumold = sum(A)
+    while true
+        temp = map(x -> ϕ(x)', vec(sum(A; dims = 2)))
+        L = L .* temp
+        A = Diagonal(temp) * A
+        temp = map(x -> ϕ(x)', vec(sum(A; dims = 1)))
+        R = R .* temp
+        A = A * Diagonal(temp)
+        sumnew = sum(A)
+        if abs(sumnew - sumold) < tol
+            break
+        end
+        sumold = sumnew
+    end
+    L, R
+end
+
+function Sinkhorn!(A)
+    n = size(A, 1)
+    F = [exp(2π * im / n * (i - 1) * (j - 1)) / sqrt(n) for i in 1 : n, j in 1 : n]
+    U = F' * A * F
+    U[1, :] .= 0
+    U[:, 1] .= 0
+    U[1, 1] = 1
+    u, = polar(U[2 : end, 2 : end])
+    U[2 : end, 2 : end] .= u
+    Anew = F * U * F'
+    L = Anew * A'
+    A .= Anew
+    L
+end
+
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
     χ, d, = size(A)
     Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
@@ -90,26 +128,24 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     end
 end
 
-ϕ(x) = iszero(x) ? one(x) : x / abs(x)
-
 struct UniformMPS <: Manifold end
 
 function Optim.retract!(::UniformMPS, AC)
     χ, d, = size(AC)
-    AC .= ACproj(AC)
-    _, S1, = svd(reshape(AC, χ, d * χ))
-    _, S2, = svd(reshape(AC, χ * d, χ))
-    S = (S1 .+ S2) ./ 2
-    invS = inv.(S)
-    AL = ein"ijk, k -> ijk"(AC, invS)
-    AR = ein"i, ijk -> ijk"(invS, AC)
+    ac, C = ACproj(AC) # fix later
+    AC .= ac
+    invC = inv(C)
+    AL = ein"ijk, kl -> ijl"(AC, invC)
+    AR = ein"ij, jkl -> ikl"(invC, AC)
     AL, L, = leftorth(AL)
     R, AR, = rightorth(AR)
-    C = L * Diagonal(S) * R
+    C .= L * C * R
     C ./= norm(C)
     AC .= ein"ijk, kl -> ijl"(AL, C)
     U, _, V = svdfix(C; fix = :U)
-    AC .= ein"ij, (jkl, lm) -> ikm"(U', AC, V)
+    L1 = Sinkhorn!(U)
+    L2 = Sinkhorn!(V)
+    AC .= ein"ij, (jkl, lm) -> ikm"(L1, AC, L2')
 end
 
 function Optim.project_tangent!(::UniformMPS, dAC, AC)
@@ -170,9 +206,12 @@ end
 
 function ACproj(AC)
     χ, d, = size(AC)
-    U, = svdfix(reshape(AC, χ, d * χ); fix = :U)
-    _, _, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
-    ein"ij, (jkl, lm) -> ikm"(U', AC, V)
+    U, S1, = svdfix(reshape(AC, χ, d * χ); fix = :U)
+    _, S2, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
+    S = (S1 .+ S2) ./ 2
+    L1, = Sinkhorn(U)
+    L2, = Sinkhorn(V)
+    ein"ij, (jkl, lm) -> ikm"(Diagonal(L1), AC, Diagonal(L2)'), Diagonal(L1) * U * Diagonal(S) * V' * Diagonal(L2)' # fix later
 end
 
 function canonicalMPS(T, χ, d)
@@ -211,9 +250,10 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
 
     function fg!(F, G, x)
         val, (dx,) = withgradient(x) do y
-            ac = ACproj(y)
-            L, = polar(reshape(ac, χ * d, χ))
-            real(local_energy(reshape(L, χ, d, χ), ac, h))
+            ac, c = ACproj(y)
+            L1, = polar(reshape(ac, χ * d, χ)) # fix leter
+            L2, = polar(c) # fix later
+            real(local_energy(reshape(L1 * L2', χ, d, χ), ac, h))
         end
         if G !== nothing
             G .= dx
