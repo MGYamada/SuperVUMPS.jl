@@ -10,7 +10,7 @@ end
 _svd(A) = svd(A) # to avoid piracy
 Zygote.@adjoint _svd(A) = svd_back(A)
 
-function svd_back(A; η = 1e-20)
+function svd_back(A; η = 1e-40)
     U, S, V = svd(A)
     (U, S, V), function (Δ)
         ΔA = Δ[2] === nothing ? zeros(eltype(A), size(A)...) : U * Diagonal(Δ[2]) * V'
@@ -106,7 +106,7 @@ struct UniformMPS <: Manifold end
 
 function Optim.retract!(::UniformMPS, AC)
     χ, d, = size(AC)
-    ac, C = ACproj(AC) # fix later
+    ac, C, = ACproj(AC) # fix later
     AC .= ac
     invC = inv(C)
     AL = ein"ijk, kl -> ijl"(AC, invC)
@@ -178,10 +178,11 @@ function ACproj(AC)
     χ, d, = size(AC)
     U, S1, = svdfix(reshape(AC, χ, d * χ); fix = :U)
     _, S2, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
+    potential = 2(χ ^ 2) - abs2(sum(U)) - abs2(sum(V))
     S = (S1 .+ S2) ./ 2
     L1 = Sinkhorn(U)
     L2 = Sinkhorn(V)
-    ein"ij, (jkl, lm) -> ikm"(L1, AC, L2'), L1 * U * Diagonal(S) * V' * L2' # fix later
+    ein"ij, (jkl, lm) -> ikm"(L1, AC, L2'), L1 * U * Diagonal(S) * V' * L2', potential # fix later
 end
 
 function canonicalMPS(T, χ, d)
@@ -213,17 +214,17 @@ function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T
     HAC, HC_rtn
 end
 
-function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) where T
+function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false, β = 1.0) where T
     χ, d, = size(A.AL)
     U, _, V = svdfix(A.C; fix = :U)
     AC = ein"ij, (jkl, lm) -> ikm"(U', A.AC, V)
 
     function fg!(F, G, x)
         val, (dx,) = withgradient(x) do y
-            ac, c = ACproj(y)
+            ac, c, potential = ACproj(y)
             L1, = polar(reshape(ac, χ * d, χ)) # fix later
             L2, = polar(c) # fix later
-            real(local_energy(reshape(L1 * L2', χ, d, χ), ac, h))
+            real(local_energy(reshape(L1 * L2', χ, d, χ), ac, h)) + β / 2 * potential
         end
         if G !== nothing
             G .= dx
