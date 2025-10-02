@@ -38,40 +38,14 @@ end
 
 ϕ(x) = iszero(x) ? one(x) : x / abs(x)
 
-function Sinkhorn(A; tol = 1e-14)
-    n = size(A, 1)
-    L = ones(eltype(A), n)
-    R = ones(eltype(A), n)
-    sumold = sum(A)
-    while true
-        temp = map(x -> ϕ(x)', vec(sum(A; dims = 2)))
-        L = L .* temp
-        A = Diagonal(temp) * A
-        temp = map(x -> ϕ(x)', vec(sum(A; dims = 1)))
-        R = R .* temp
-        A = A * Diagonal(temp)
-        sumnew = sum(A)
-        if abs(sumnew - sumold) < tol
-            break
-        end
-        sumold = sumnew
-    end
-    L, R
-end
-
-function Sinkhorn!(A)
+function Sinkhorn(A)
     n = size(A, 1)
     F = [exp(2π * im / n * (i - 1) * (j - 1)) / sqrt(n) for i in 1 : n, j in 1 : n]
-    U = F' * A * F
-    U[1, :] .= 0
-    U[:, 1] .= 0
-    U[1, 1] = 1
-    u, = polar(U[2 : end, 2 : end])
-    U[2 : end, 2 : end] .= u
-    Anew = F * U * F'
-    L = Anew * A'
-    A .= Anew
-    L
+    U1 = F' * A * F
+    U2 = [i == 1 && j == 1 ? one(eltype(A)) : (i == 1 || j == 1 ? zero(eltype(A)) : U1[i, j]) for i in 1 : n, j in 1 : n]
+    u, = polar(U2)
+    Anew = F * u * F'
+    Anew * A'
 end
 
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
@@ -143,9 +117,9 @@ function Optim.retract!(::UniformMPS, AC)
     C ./= norm(C)
     AC .= ein"ijk, kl -> ijl"(AL, C)
     U, _, V = svdfix(C; fix = :U)
-    L1 = Sinkhorn!(U)
-    L2 = Sinkhorn!(V)
-    AC .= ein"ij, (jkl, lm) -> ikm"(L1, AC, L2')
+    L1 = Sinkhorn(U)
+    L2 = Sinkhorn(V)
+    AC .= ein"ij, (jkl, lm) -> ikm"(L1, AC, L2') # gauge fixing is actually not necessary
 end
 
 function Optim.project_tangent!(::UniformMPS, dAC, AC)
@@ -209,9 +183,9 @@ function ACproj(AC)
     U, S1, = svdfix(reshape(AC, χ, d * χ); fix = :U)
     _, S2, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
     S = (S1 .+ S2) ./ 2
-    L1, = Sinkhorn(U)
-    L2, = Sinkhorn(V)
-    ein"ij, (jkl, lm) -> ikm"(Diagonal(L1), AC, Diagonal(L2)'), Diagonal(L1) * U * Diagonal(S) * V' * Diagonal(L2)' # fix later
+    L1 = Sinkhorn(U)
+    L2 = Sinkhorn(V)
+    ein"ij, (jkl, lm) -> ikm"(L1, AC, L2'), L1 * U * Diagonal(S) * V' * L2' # fix later
 end
 
 function canonicalMPS(T, χ, d)
