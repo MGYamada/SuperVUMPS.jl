@@ -10,7 +10,7 @@ end
 _svd(A) = svd(A) # to avoid piracy
 Zygote.@adjoint _svd(A) = svd_back(A)
 
-function svd_back(A; η = 1e-40)
+function svd_back(A; η = 1e-20)
     U, S, V = svd(A)
     (U, S, V), function (Δ)
         ΔA = Δ[2] === nothing ? zeros(eltype(A), size(A)...) : U * Diagonal(Δ[2]) * V'
@@ -116,10 +116,6 @@ function Optim.retract!(::UniformMPS, AC)
     C .= L * C * R
     C ./= norm(C)
     AC .= ein"ijk, kl -> ijl"(AL, C)
-    U, _, V = svdfix(C; fix = :U)
-    L1 = Sinkhorn(U)
-    L2 = Sinkhorn(V)
-    AC .= ein"ij, (jkl, lm) -> ikm"(L1, AC, L2') # gauge fixing is actually not necessary
 end
 
 function Optim.project_tangent!(::UniformMPS, dAC, AC)
