@@ -214,7 +214,7 @@ function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T
     HAC, HC_rtn
 end
 
-function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false, β = 1.0) where T
+function svumps(h::T, A; tol = 1e-8, iterations = 10000, Hamiltonian = false, β = 0.0) where T
     χ, d, = size(A.AL)
     U, _, V = svdfix(A.C; fix = :U)
     AC = ein"ij, (jkl, lm) -> ikm"(U', A.AC, V)
