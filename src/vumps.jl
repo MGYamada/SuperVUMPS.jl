@@ -225,7 +225,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
     function fg!(F, G, x)
         val, (dx,) = withgradient(x) do y
             ac, c = ACproj(y)
-            L1, = polar(reshape(ac, χ * d, χ)) # fix leter
+            L1, = polar(reshape(ac, χ * d, χ)) # fix later
             L2, = polar(c) # fix later
             real(local_energy(reshape(L1 * L2', χ, d, χ), ac, h))
         end
@@ -239,10 +239,13 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
     res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
 
     AC .= Optim.minimizer(res)
-    L, = polar(reshape(AC, χ * d, χ))
-    C, R = polar(reshape(AC, χ, d * χ); rev = true)
-    AL = reshape(L, χ, d, χ)
-    AR = reshape(R, χ, d, χ)
+    _, C = ACproj(AC)
+    L1, = polar(reshape(AC, χ * d, χ)) # fix later
+    L2, = polar(C) # fix later
+    AL = reshape(L1 * L2', χ, d, χ)
+    _, R1 = polar(reshape(AC, χ, d * χ); rev = true) # fix later
+    _, R2 = polar(C; rev = true) # fix later
+    AR = reshape(R2' * R1, χ, d, χ)
     A = MixedCanonicalMPS(AL, AR, AC, C)
 
     E = real(local_energy(A.AL, A.AC, h))
