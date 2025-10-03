@@ -106,6 +106,8 @@ function Optim.retract!(::UniformMPS, AC)
     C .= L * C * R
     C ./= norm(C)
     AC .= ein"ijk, kl -> ijl"(AL, C)
+    ac, = ACproj(AC) # polar gauge
+    AC .= ac # gauge fixing is actually not necessary
 end
 
 function Optim.project_tangent!(::UniformMPS, dAC, AC)
