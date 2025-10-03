@@ -38,16 +38,6 @@ end
 
 ϕ(x) = iszero(x) ? one(x) : x / abs(x)
 
-function Sinkhorn(A)
-    n = size(A, 1)
-    F = [exp(2π * im / n * (i - 1) * (j - 1)) / sqrt(n) for i in 1 : n, j in 1 : n]
-    U1 = F' * A * F
-    U2 = [i == 1 && j == 1 ? one(eltype(A)) : (i == 1 || j == 1 ? zero(eltype(A)) : U1[i, j]) for i in 1 : n, j in 1 : n]
-    u, = polar(U2)
-    Anew = F * u * F'
-    Anew * A'
-end
-
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
     χ, d, = size(A)
     Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
@@ -178,11 +168,11 @@ function ACproj(AC)
     χ, d, = size(AC)
     U, S1, = svdfix(reshape(AC, χ, d * χ); fix = :U)
     _, S2, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
-    potential = 2(χ ^ 2) - abs2(sum(U)) - abs2(sum(V))
     S = (S1 .+ S2) ./ 2
-    L1 = Sinkhorn(U)
-    L2 = Sinkhorn(V)
-    ein"ij, (jkl, lm) -> ikm"(L1, AC, L2'), L1 * U * Diagonal(S) * V' * L2', potential # fix later
+    W, = polar((U .+ V) ./ 2)
+    L1 = W * U'
+    L2 = W * V'
+    ein"ij, (jkl, lm) -> ikm"(L1, AC, L2'), W * Diagonal(S) * W', 0.0 # fix later
 end
 
 function canonicalMPS(T, χ, d)
