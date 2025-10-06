@@ -36,6 +36,21 @@ function svd_back(A; η = 1e-40)
     end
 end
 
+function Sinkhorn!(A)
+    n = size(A, 1)
+    F = [exp(2π * im / n * (i - 1) * (j - 1)) / sqrt(n) for i in 1 : n, j in 1 : n]
+    U = F' * A * F
+    U[1, :] .= 0
+    U[:, 1] .= 0
+    U[1, 1] = 1
+    u, = polar(U[2 : end, 2 : end])
+    U[2 : end, 2 : end] .= u
+    Anew = F * U * F'
+    L = Anew * A'
+    A .= Anew
+    L
+end
+
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
     χ, d, = size(A)
     Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
@@ -90,38 +105,83 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     end
 end
 
+ϕ(x) = iszero(x) ? one(x) : x / abs(x)
+
+function svdfix(A; fix = :U)
+    U, S, V = _svd(A)
+    if fix == :U
+        phase = map(x -> ϕ(x)', vec(sum(U; dims = 1)))
+        U = U * Diagonal(phase)
+        V = V * Diagonal(phase)
+    elseif fix == :V
+        phase = map(x -> ϕ(x)', vec(sum(V; dims = 1)))
+        U = U * Diagonal(phase)
+        V = V * Diagonal(phase)
+    end
+    U, S, V
+end
+
+function ACproj(AC)
+    χ, d, = size(AC)
+    U, S1, = svdfix(reshape(AC, χ, d * χ); fix = :U)
+    _, S2, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
+    S = (S1 .+ S2) ./ 2
+    W, = polar((U .+ V) ./ 2)
+    L1 = W * U'
+    L2 = W * V'
+    ein"ij, (jkl, lm) -> ikm"(L1, AC, L2'), W * Diagonal(S) * W'
+end
+
 struct UniformMPS <: Manifold end
 
 function Optim.retract!(::UniformMPS, AC)
     χ, d, = size(AC)
     ac, C = ACproj(AC) # fix later
-    AC .= ac
-    invC = inv(C)
+    AC .= ac # fix later
+    invC = inv(C) # fix later
     AL = ein"ijk, kl -> ijl"(AC, invC)
     AR = ein"ij, jkl -> ikl"(invC, AC)
     AL, L, = leftorth(AL)
     R, AR, = rightorth(AR)
-    C .= L * C * R
+    C = L * C * R
     C ./= norm(C)
     AC .= ein"ijk, kl -> ijl"(AL, C)
-    ac, = ACproj(AC) # polar gauge
-    AC .= ac # gauge fixing is actually not necessary
+    U, _, V = svdfix(C; fix = :U)
+    L1 = Sinkhorn!(U)
+    L2 = Sinkhorn!(V)
+    AC .= ein"(ij, jkl), lm -> ikm"(L1, AC, L2')
 end
 
-function Optim.project_tangent!(::UniformMPS, dAC, AC)
+function Optim.project_tangent!(::UniformMPS, dAC, AC; η = 1e-40)
+    # O(χ⁴) algorithm by M. G. Yamada
     χ, d, = size(AC)
-    U1, _, V1 = svd(reshape(AC, χ, d * χ))
-    U2, _, V2 = svd(reshape(AC, χ * d, χ))
-    M = Matrix{eltype(AC)}(I, χ, χ)
-    for i in 1 : χ, j in 1 : χ
-        M[i, j] -= (transpose(U1[:, j]) * reshape(U2'[i, :], χ, d)) * (reshape(V1'[j, :], d, χ) * V2[:, i])
+    Optim.retract!(UniformMPS(), AC)
+    U1, S1, V1 = svdfix(reshape(AC, χ, d * χ); fix = :U)
+    U2, S2, V2 = svdfix(reshape(AC, χ * d, χ); fix = :V)
+    S = (S1 .+ S2) ./ 2
+    S² = S .^ 2
+    F = S²' .- S²
+    @. F /= (F ^ 2 + η)
+    dU1 = U1 * (F .* (x -> x .+ x')(U1' * reshape(dAC, χ, d * χ) * V1 * Diagonal(S)))
+    dU1 .-= U1 * Diagonal(im .* imag.(vec(sum(dU1; dims = 1))))
+    dV2 = V2 * (F .* (x -> x .+ x')(Diagonal(S) * U2' * reshape(dAC, χ * d, χ) * V2))
+    dV2 .-= V2 * Diagonal(im .* imag.(vec(sum(dV2; dims = 1))))
+    x = vcat(real.(diag(U1' * reshape(dAC, χ, d * χ) * V1 .- U2' * reshape(dAC, χ * d, χ) * V2)), real.(vec(sum(dU1; dims = 1))), real.(vec(sum(dV2; dims = 1))))
+    A = zeros(3χ, 3χ)
+    function a(x)
+        dac = reshape(U1 * ((x -> x .+ x')(F .* (U1' * transpose(reshape(repeat(x[χ + 1 : 2χ], χ), χ, χ)))) * Diagonal(S) .+ Diagonal(x[1 : χ])) * V1', χ, d, χ) .+ reshape(U2 * (Diagonal(S) * (x -> x .+ x')(F .* (V2' * transpose(reshape(repeat(x[2χ + 1 : end], χ), χ, χ)))) .- Diagonal(x[1 : χ])) * V2', χ, d, χ)
+        du1 = U1 * (F .* (x -> x .+ x')(U1' * reshape(dac, χ, d * χ) * V1 * Diagonal(S)))
+        du1 .-= U1 * Diagonal(im .* imag.(vec(sum(du1; dims = 1))))
+        dv2 = V2 * (F .* (x -> x .+ x')(Diagonal(S) * U2' * reshape(dac, χ * d, χ) * V2))
+        dv2 .-= V2 * Diagonal(im .* imag.(vec(sum(dv2; dims = 1))))
+        vcat(real.(diag(U1' * reshape(dac, χ, d * χ) * V1 .- U2' * reshape(dac, χ * d, χ) * V2)), real.(vec(sum(du1; dims = 1))), real.(vec(sum(dv2; dims = 1))))
     end
-    M .+= M'
-    K1 = U1' * reshape(dAC, χ, d * χ) * V1
-    K2 = U2' * reshape(dAC, χ * d, χ) * V2
-    U, S, V = svd(M)
-    temp = V[:, 1 : end - 1] * (Diagonal(inv.(S[1 : end - 1])) * (U'[1 : end - 1, :] * diag(K1 .- K2)))
-    dAC .-= reshape(U1 * Diagonal(temp) * V1', χ, d, χ) .- reshape(U2 * Diagonal(temp) * V2', χ, d, χ)
+    for i in 1 : 3χ
+        A[:, i] .= a(Matrix{Float64}(I, 3χ, 3χ)[:, i])
+    end
+    U, s, V = svd(A)
+    temp = V[:, 1 : end - 3] * (Diagonal(inv.(s[1 : end - 3])) * (U[:, 1 : end - 3]' * x))
+    dAC .-= reshape(U1 * ((x -> x .+ x')(F .* (U1' * transpose(reshape(repeat(temp[χ + 1 : 2χ], χ), χ, χ)))) * Diagonal(S) .+ Diagonal(temp[1 : χ])) * V1', χ, d, χ) .+ reshape(U2 * (Diagonal(S) * (x -> x .+ x')(F .* (V2' * transpose(reshape(repeat(temp[2χ + 1 : end], χ), χ, χ)))) .- Diagonal(temp[1 : χ])) * V2', χ, d, χ)
     dAC .-= AC .* real(dot(AC, dAC))
 end
 
@@ -148,33 +208,6 @@ function regularize_right(AR, ARbar, C, Cbar, h, χ; tol = 1e-12)
     initial = ein"ijk, (klm, (jlno, (pnq, qom))) -> ip"(ARbar, ARbar, h, AR, AR)
     Rh, = linsolve(x -> x .- ein"ijk, (mjl, kl) -> im"(ARbar, AR, x) .+ r .* ein"ij, ij -> "(l, x)[], initial .- r .* ein"ij, ij -> "(l, initial)[]; ishermitian = false, tol = tol, verbosity = 0)
     (Rh .+ Rh') ./ 2
-end
-
-ϕ(x) = iszero(x) ? one(x) : x / abs(x)
-
-function svdfix(A; fix = :U)
-    U, S, V = _svd(A)
-    if fix == :U
-        phase = map(x -> ϕ(x)', vec(sum(U; dims = 1)))
-        U = U * Diagonal(phase)
-        V = V * Diagonal(phase)
-    elseif fix == :V
-        phase = map(x -> ϕ(x)', vec(sum(V; dims = 1)))
-        U = U * Diagonal(phase)
-        V = V * Diagonal(phase)
-    end
-    U, S, V
-end
-
-function ACproj(AC)
-    χ, d, = size(AC)
-    U, S1, = svdfix(reshape(AC, χ, d * χ); fix = :U)
-    _, S2, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
-    S = (S1 .+ S2) ./ 2
-    W, = polar((U .+ V) ./ 2)
-    L1 = W * U'
-    L2 = W * V'
-    ein"ij, (jkl, lm) -> ikm"(L1, AC, L2'), W * Diagonal(S) * W'
 end
 
 function canonicalMPS(T, χ, d)
