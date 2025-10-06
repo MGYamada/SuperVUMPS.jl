@@ -36,8 +36,6 @@ function svd_back(A; η = 1e-40)
     end
 end
 
-ϕ(x) = iszero(x) ? one(x) : x / abs(x)
-
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
     χ, d, = size(A)
     Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
@@ -96,7 +94,7 @@ struct UniformMPS <: Manifold end
 
 function Optim.retract!(::UniformMPS, AC)
     χ, d, = size(AC)
-    ac, C, = ACproj(AC) # fix later
+    ac, C = ACproj(AC) # fix later
     AC .= ac
     invC = inv(C)
     AL = ein"ijk, kl -> ijl"(AC, invC)
@@ -152,6 +150,8 @@ function regularize_right(AR, ARbar, C, Cbar, h, χ; tol = 1e-12)
     (Rh .+ Rh') ./ 2
 end
 
+ϕ(x) = iszero(x) ? one(x) : x / abs(x)
+
 function svdfix(A; fix = :U)
     U, S, V = _svd(A)
     if fix == :U
@@ -174,7 +174,7 @@ function ACproj(AC)
     W, = polar((U .+ V) ./ 2)
     L1 = W * U'
     L2 = W * V'
-    ein"ij, (jkl, lm) -> ikm"(L1, AC, L2'), W * Diagonal(S) * W', 0.0 # fix later
+    ein"ij, (jkl, lm) -> ikm"(L1, AC, L2'), W * Diagonal(S) * W'
 end
 
 function canonicalMPS(T, χ, d)
@@ -206,17 +206,17 @@ function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T
     HAC, HC_rtn
 end
 
-function svumps(h::T, A; tol = 1e-8, iterations = 10000, Hamiltonian = false, β = 0.0) where T
+function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) where T
     χ, d, = size(A.AL)
-    U, _, V = svdfix(A.C; fix = :U)
+    U, _, V = svd(A.C) # fix later
     AC = ein"ij, (jkl, lm) -> ikm"(U', A.AC, V)
 
     function fg!(F, G, x)
         val, (dx,) = withgradient(x) do y
-            ac, c, potential = ACproj(y)
+            ac, c = ACproj(y)
             L1, = polar(reshape(ac, χ * d, χ)) # fix later
             L2, = polar(c) # fix later
-            real(local_energy(reshape(L1 * L2', χ, d, χ), ac, h)) + β / 2 * potential
+            real(local_energy(reshape(L1 * L2', χ, d, χ), ac, h))
         end
         if G !== nothing
             G .= dx
