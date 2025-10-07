@@ -121,23 +121,26 @@ function svdfix(A; fix = :U)
     U, S, V
 end
 
-function ACproj(AC, W)
+function ACproj(AC, u, v)
     χ, d, = size(AC)
     U, S1, = svdfix(reshape(AC, χ, d * χ); fix = :U)
     _, S2, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
     S = (S1 .+ S2) ./ 2
-    ein"ij, (jkl, lm) -> ikm"(W * U', AC, V * W'), W * Diagonal(S) * W'
+    ein"ij, (jkl, lm) -> ikm"(u, AC, v'), u * U * Diagonal(S) * V' * v'
 end
 
 struct UniformMPS <: Manifold end
 
 function Optim.retract!(::UniformMPS, x)
     χ, d, = size(x)
-    d -= 1
-    W = x[:, end, :]
-    w, = polar(W)
-    x[:, end, :] .= w
-    AC = x[:, 1 : end - 1, :]
+    d -= 2
+    U = x[:, end - 1, :]
+    u, = polar(U)
+    x[:, end - 1, :] .= u
+    V = x[:, end, :]
+    v, = polar(V)
+    x[:, end, :] .= v
+    AC = x[:, 1 : end - 2, :]
     U, S1, = svdfix(reshape(AC, χ, d * χ); fix = :U)
     _, S2, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
     S = (S1 .+ S2) ./ 2
@@ -154,16 +157,18 @@ function Optim.retract!(::UniformMPS, x)
     L1 = Sinkhorn!(U)
     L2 = Sinkhorn!(V)
     AC .= ein"(ij, jkl), lm -> ikm"(L1, AC, L2')
-    x[:, 1 : end - 1, :] .= AC
+    x[:, 1 : end - 2, :] .= AC
+    x[:, end - 1, :] .= x[:, end - 1, :] * L1'
+    x[:, end, :] .= x[:, end, :] * L2'
     x
 end
 
 function Optim.project_tangent!(::UniformMPS, dx, x; η = 1e-40)
     # O(χ⁴) algorithm by M. G. Yamada
     χ, d, = size(x)
-    d -= 1
-    AC = x[:, 1 : end - 1, :]
-    dAC = dx[:, 1 : end - 1, :]
+    d -= 2
+    AC = x[:, 1 : end - 2, :]
+    dAC = dx[:, 1 : end - 2, :]
     U1, S1, V1 = svdfix(reshape(AC, χ, d * χ); fix = :U)
     U2, S2, V2 = svdfix(reshape(AC, χ * d, χ); fix = :V)
     S = (S1 .+ S2) ./ 2
@@ -191,12 +196,17 @@ function Optim.project_tangent!(::UniformMPS, dx, x; η = 1e-40)
     temp = V[:, 1 : end - 3] * (Diagonal(inv.(s[1 : end - 3])) * (U[:, 1 : end - 3]' * v))
     dAC .-= reshape(U1 * ((x -> x .+ x')(F .* (U1' * transpose(reshape(repeat(temp[χ + 1 : 2χ], χ), χ, χ)))) * Diagonal(S) .+ Diagonal(temp[1 : χ])) * V1', χ, d, χ) .+ reshape(U2 * (Diagonal(S) * (x -> x .+ x')(F .* (V2' * transpose(reshape(repeat(temp[2χ + 1 : end], χ), χ, χ)))) .- Diagonal(temp[1 : χ])) * V2', χ, d, χ)
     dAC .-= AC .* real(dot(AC, dAC))
-    dx[:, 1 : end - 1, :] .= dAC
-    W = x[:, end, :]
-    dW = dx[:, end, :]
-    WdW = W' * dW
-    dW .-= W * ((WdW .+ WdW') ./ 2)
-    dx[:, end, :] .= dW
+    dx[:, 1 : end - 2, :] .= dAC
+    u = x[:, end - 1, :]
+    du = dx[:, end - 1, :]
+    udu = u' * du
+    du .-= u * ((udu .+ udu') ./ 2)
+    dx[:, end - 1, :] .= du
+    v = x[:, end, :]
+    dv = dx[:, end, :]
+    vdv = v' * dv
+    dv .-= v * ((vdv .+ vdv') ./ 2)
+    dx[:, end, :] .= dv
 end
 
 struct MixedCanonicalMPS{T <: Complex}
@@ -260,7 +270,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
 
     function fg!(F, G, x)
         val, (dx,) = withgradient(x) do y
-            ac, c = ACproj(y[:, 1 : end - 1, :], y[:, end, :])
+            ac, c = ACproj(y[:, 1 : end - 2, :], y[:, end - 1, :], y[:, end, :])
             L1, = polar(reshape(ac, χ * d, χ)) # fix later
             L2, = polar(c) # fix later
             real(local_energy(reshape(L1 * L2', χ, d, χ), ac, h))
@@ -272,10 +282,10 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
             return val
         end
     end
-    res = optimize(Optim.only_fg!(fg!), cat(AC, reshape(Matrix{eltype(AC)}(I, χ, χ), χ, 1, χ); dims = 2), LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
+    res = optimize(Optim.only_fg!(fg!), cat(AC, reshape(Matrix{eltype(AC)}(I, χ, χ), χ, 1, χ), reshape(Matrix{eltype(AC)}(I, χ, χ), χ, 1, χ); dims = 2), LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
 
     x = Optim.minimizer(res)
-    AC, C = ACproj(x[:, 1 : end - 1, :], x[:, end, :])
+    AC, C = ACproj(x[:, 1 : end - 2, :], x[:, end - 1, :], x[:, end, :])
     L1, = polar(reshape(AC, χ * d, χ)) # fix later
     L2, = polar(C) # fix later
     AL = reshape(L1 * L2', χ, d, χ)
