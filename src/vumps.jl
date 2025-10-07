@@ -275,8 +275,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
     res = optimize(Optim.only_fg!(fg!), cat(AC, reshape(Matrix{eltype(AC)}(I, χ, χ), χ, 1, χ); dims = 2), LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
 
     x = Optim.minimizer(res)
-    AC .= x[:, 1 : end - 1, :]
-    _, C = ACproj(AC, x[:, end, :])
+    AC, C = ACproj(x[:, 1 : end - 1, :], x[:, end, :])
     L1, = polar(reshape(AC, χ * d, χ)) # fix later
     L2, = polar(C) # fix later
     AL = reshape(L1 * L2', χ, d, χ)
