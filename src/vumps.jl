@@ -121,41 +121,49 @@ function svdfix(A; fix = :U)
     U, S, V
 end
 
-function ACproj(AC)
+function ACproj(AC, W)
     χ, d, = size(AC)
     U, S1, = svdfix(reshape(AC, χ, d * χ); fix = :U)
     _, S2, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
     S = (S1 .+ S2) ./ 2
-    W, = polar((U .+ V) ./ 2)
-    L1 = W * U'
-    L2 = W * V'
-    ein"ij, (jkl, lm) -> ikm"(L1, AC, L2'), W * Diagonal(S) * W'
+    ein"ij, (jkl, lm) -> ikm"(W * U', AC, V * W'), W * Diagonal(S) * W'
 end
 
 struct UniformMPS <: Manifold end
 
-function Optim.retract!(::UniformMPS, AC)
-    χ, d, = size(AC)
-    ac, C = ACproj(AC) # fix later
-    AC .= ac # fix later
+function Optim.retract!(::UniformMPS, x)
+    χ, d, = size(x)
+    d -= 1
+    W = x[:, end, :]
+    w, = polar(W)
+    x[:, end, :] .= w
+    AC = x[:, 1 : end - 1, :]
+    U, S1, = svdfix(reshape(AC, χ, d * χ); fix = :U)
+    _, S2, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
+    S = (S1 .+ S2) ./ 2
+    C = U * Diagonal(S) * V'
     invC = inv(C) # fix later
     AL = ein"ijk, kl -> ijl"(AC, invC)
     AR = ein"ij, jkl -> ikl"(invC, AC)
     AL, L, = leftorth(AL)
     R, AR, = rightorth(AR)
-    C = L * C * R
+    C .= L * C * R
     C ./= norm(C)
     AC .= ein"ijk, kl -> ijl"(AL, C)
     U, _, V = svdfix(C; fix = :U)
     L1 = Sinkhorn!(U)
     L2 = Sinkhorn!(V)
     AC .= ein"(ij, jkl), lm -> ikm"(L1, AC, L2')
+    x[:, 1 : end - 1, :] .= AC
+    x
 end
 
-function Optim.project_tangent!(::UniformMPS, dAC, AC; η = 1e-40)
+function Optim.project_tangent!(::UniformMPS, dx, x; η = 1e-40)
     # O(χ⁴) algorithm by M. G. Yamada
-    χ, d, = size(AC)
-    Optim.retract!(UniformMPS(), AC)
+    χ, d, = size(x)
+    d -= 1
+    AC = x[:, 1 : end - 1, :]
+    dAC = dx[:, 1 : end - 1, :]
     U1, S1, V1 = svdfix(reshape(AC, χ, d * χ); fix = :U)
     U2, S2, V2 = svdfix(reshape(AC, χ * d, χ); fix = :V)
     S = (S1 .+ S2) ./ 2
@@ -166,7 +174,7 @@ function Optim.project_tangent!(::UniformMPS, dAC, AC; η = 1e-40)
     dU1 .-= U1 * Diagonal(im .* imag.(vec(sum(dU1; dims = 1))))
     dV2 = V2 * (F .* (x -> x .+ x')(Diagonal(S) * U2' * reshape(dAC, χ * d, χ) * V2))
     dV2 .-= V2 * Diagonal(im .* imag.(vec(sum(dV2; dims = 1))))
-    x = vcat(real.(diag(U1' * reshape(dAC, χ, d * χ) * V1 .- U2' * reshape(dAC, χ * d, χ) * V2)), real.(vec(sum(dU1; dims = 1))), real.(vec(sum(dV2; dims = 1))))
+    v = vcat(real.(diag(U1' * reshape(dAC, χ, d * χ) * V1 .- U2' * reshape(dAC, χ * d, χ) * V2)), real.(vec(sum(dU1; dims = 1))), real.(vec(sum(dV2; dims = 1))))
     A = zeros(3χ, 3χ)
     function a(x)
         dac = reshape(U1 * ((x -> x .+ x')(F .* (U1' * transpose(reshape(repeat(x[χ + 1 : 2χ], χ), χ, χ)))) * Diagonal(S) .+ Diagonal(x[1 : χ])) * V1', χ, d, χ) .+ reshape(U2 * (Diagonal(S) * (x -> x .+ x')(F .* (V2' * transpose(reshape(repeat(x[2χ + 1 : end], χ), χ, χ)))) .- Diagonal(x[1 : χ])) * V2', χ, d, χ)
@@ -180,9 +188,15 @@ function Optim.project_tangent!(::UniformMPS, dAC, AC; η = 1e-40)
         A[:, i] .= a(Matrix{Float64}(I, 3χ, 3χ)[:, i])
     end
     U, s, V = svd(A)
-    temp = V[:, 1 : end - 3] * (Diagonal(inv.(s[1 : end - 3])) * (U[:, 1 : end - 3]' * x))
+    temp = V[:, 1 : end - 3] * (Diagonal(inv.(s[1 : end - 3])) * (U[:, 1 : end - 3]' * v))
     dAC .-= reshape(U1 * ((x -> x .+ x')(F .* (U1' * transpose(reshape(repeat(temp[χ + 1 : 2χ], χ), χ, χ)))) * Diagonal(S) .+ Diagonal(temp[1 : χ])) * V1', χ, d, χ) .+ reshape(U2 * (Diagonal(S) * (x -> x .+ x')(F .* (V2' * transpose(reshape(repeat(temp[2χ + 1 : end], χ), χ, χ)))) .- Diagonal(temp[1 : χ])) * V2', χ, d, χ)
     dAC .-= AC .* real(dot(AC, dAC))
+    dx[:, 1 : end - 1, :] .= dAC
+    W = x[:, end, :]
+    dW = dx[:, end, :]
+    WdW = W' * dW
+    dW .-= W * ((WdW .+ WdW') ./ 2)
+    dx[:, end, :] .= dW
 end
 
 struct MixedCanonicalMPS{T <: Complex}
@@ -246,7 +260,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
 
     function fg!(F, G, x)
         val, (dx,) = withgradient(x) do y
-            ac, c = ACproj(y)
+            ac, c = ACproj(y[:, 1 : end - 1, :], y[:, end, :])
             L1, = polar(reshape(ac, χ * d, χ)) # fix later
             L2, = polar(c) # fix later
             real(local_energy(reshape(L1 * L2', χ, d, χ), ac, h))
@@ -258,10 +272,11 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
             return val
         end
     end
-    res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
+    res = optimize(Optim.only_fg!(fg!), cat(AC, reshape(Matrix{eltype(AC)}(I, χ, χ), χ, 1, χ); dims = 2), LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
 
-    AC .= Optim.minimizer(res)
-    _, C = ACproj(AC)
+    x = Optim.minimizer(res)
+    AC .= x[:, 1 : end - 1, :]
+    _, C = ACproj(AC, x[:, end, :])
     L1, = polar(reshape(AC, χ * d, χ)) # fix later
     L2, = polar(C) # fix later
     AL = reshape(L1 * L2', χ, d, χ)
