@@ -51,7 +51,7 @@ function Sinkhorn!(A)
     L
 end
 
-function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
+function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 1000, kwargs...)
     χ, d, = size(A)
     Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
     AL = Array(reshape(Q, χ, d, χ))
@@ -78,7 +78,7 @@ function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-
     end
 end
 
-function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
+function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 1000, kwargs...)
     χ, d, = size(A)
     L, Q = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
     AR = Array(reshape(Q, χ, d, χ))
