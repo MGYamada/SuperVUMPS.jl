@@ -60,7 +60,7 @@ function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-
     numiter = 1
     while norm(C .- R) > tol && numiter < maxiter
         ALbar = conj.(AL)
-        _, vecs = eigsolve(R, 1, :LR; ishermitian = false, tol = tol, verbosity = 0, kwargs...) do X
+        _, vecs = eigsolve(R, 1, :LR; ishermitian = false, tol = tol, maxiter = 10, verbosity = 0, kwargs...) do X
             ein"(ij, ikl), jkm -> lm"(X, ALbar, A)
         end
         C = vecs[1]
@@ -87,7 +87,7 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     numiter = 1
     while norm(C .- L) > tol && numiter < maxiter
         ARbar = conj.(AR)
-        _, vecs = eigsolve(L, 1, :LR; ishermitian = false, tol = tol, verbosity = 0, kwargs...) do X
+        _, vecs = eigsolve(L, 1, :LR; ishermitian = false, tol = tol, maxiter = 10, verbosity = 0, kwargs...) do X
             ein"mkj, (lki, ji) -> ml"(A, ARbar, X)
         end
         C = vecs[1]
@@ -129,7 +129,16 @@ function ACproj(AC)
     AC, U * Diagonal(S) * V'
 end
 
-function retractAC!(AC, χ, d)
+mutable struct UniformMPS <: Manifold
+    L::Matrix
+    R::Matrix
+end
+
+function Optim.retract!(mfd::UniformMPS, AC)
+    χ, d, = size(AC)
+    U0, = svdfix(reshape(AC, χ, d * χ); fix = :U)
+    _, _, V0 = svdfix(reshape(AC, χ * d, χ); fix = :V)
+    AC .= ein"(ij, jkl), lm -> ikm"(U0', AC, V0)
     AC1 = reshape(AC, χ * d, χ)
     AC2 = Array(reshape(AC, χ, d * χ)')
     U, V, Q, D1, D2, R0 = svd(AC1, AC2)
@@ -137,26 +146,16 @@ function retractAC!(AC, χ, d)
     W, C = polar(X)
     AL = reshape((U * D1 * W) .* sqrt(2), χ, d, χ)
     AR = reshape((V * D2 * W)' .* sqrt(2), χ, d, χ)
-    AL, L, = leftorth(AL)
-    AC .= ein"ij, jkl -> ikl"(L, AC)
-    C .= L * C
-    R, AR, = rightorth(AR)
-    AC .= ein"ijk, kl -> ijl"(AC, R)
-    C .= C * R
+    AL, mfd.L, = leftorth(AL, mfd.L)
+    AC .= ein"ij, jkl -> ikl"(mfd.L, AC)
+    C .= mfd.L * C
+    mfd.R, AR, = rightorth(AR, mfd.R)
+    AC .= ein"ijk, kl -> ijl"(AC, mfd.R)
+    C .= C * mfd.R
     U, P = polar(C)
     AC .= ein"ij, jkl -> ikl"(P, AR)
     AC ./= norm(AC)
-    P
-end
-
-struct UniformMPS <: Manifold end
-
-function Optim.retract!(::UniformMPS, AC)
-    χ, d, = size(AC)
-    U0, = svdfix(reshape(AC, χ, d * χ); fix = :U)
-    _, _, V0 = svdfix(reshape(AC, χ * d, χ); fix = :V)
-    AC .= ein"(ij, jkl), lm -> ikm"(U0', AC, V0)
-    C = retractAC!(AC, χ, d)
+    C .= P
     AC .= ein"(ij, jkl), lm -> ikm"(U0, AC, V0')
     C .= U0 * C * V0'
     U, _, V = svdfix(C; fix = :U)
@@ -270,7 +269,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
             return val
         end
     end
-    res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
+    res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS(Matrix{eltype(AC)}(I, χ, χ), Matrix{eltype(AC)}(I, χ, χ))), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
 
     x = Optim.minimizer(res)
     AC, C = ACproj(x)
