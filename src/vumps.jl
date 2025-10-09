@@ -60,7 +60,7 @@ function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-
     numiter = 1
     while norm(C .- R) > tol && numiter < maxiter
         ALbar = conj.(AL)
-        _, vecs = eigsolve(R, 1, :LR; ishermitian = false, tol = tol, maxiter = 1, verbosity = 0, kwargs...) do X
+        _, vecs = eigsolve(R, 1, :LR; ishermitian = false, tol = tol, verbosity = 0, kwargs...) do X
             ein"(ij, ikl), jkm -> lm"(X, ALbar, A)
         end
         C = vecs[1]
@@ -87,7 +87,7 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     numiter = 1
     while norm(C .- L) > tol && numiter < maxiter
         ARbar = conj.(AR)
-        _, vecs = eigsolve(L, 1, :LR; ishermitian = false, tol = tol, maxiter = 1, verbosity = 0, kwargs...) do X
+        _, vecs = eigsolve(L, 1, :LR; ishermitian = false, tol = tol, verbosity = 0, kwargs...) do X
             ein"mkj, (lki, ji) -> ml"(A, ARbar, X)
         end
         C = vecs[1]
