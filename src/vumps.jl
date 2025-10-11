@@ -36,6 +36,21 @@ function svd_back(A; η = 1e-40)
     end
 end
 
+function Sinkhorn!(A)
+    n = size(A, 1)
+    F = [exp(2π * im / n * (i - 1) * (j - 1)) / sqrt(n) for i in 1 : n, j in 1 : n]
+    U = F' * A * F
+    U[1, :] .= 0
+    U[:, 1] .= 0
+    U[1, 1] = 1
+    u, = polar(U[2 : end, 2 : end])
+    U[2 : end, 2 : end] .= u
+    Anew = F * U * F'
+    L = Anew * A'
+    A .= Anew
+    L
+end
+
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
     χ, d, = size(A)
     Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
@@ -141,7 +156,9 @@ function Optim.retract!(::UniformMPS, AC)
     AC .= ein"(ij, jkl), lm -> ikm"(U0, AC, V0')
     C .= U0 * C * V0'
     U, _, V = svdfix(C; fix = :U)
-    AC .= ein"(ij, jkl), lm -> ikm"(U', AC, V)
+    L1 = Sinkhorn!(U)
+    L2 = Sinkhorn!(V)
+    AC .= ein"(ij, jkl), lm -> ikm"(L1, AC, L2') # this is not strictly necessary
 end
 
 function Optim.project_tangent!(::UniformMPS, dAC, AC; η = 1e-40)
