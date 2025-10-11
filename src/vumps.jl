@@ -123,10 +123,9 @@ end
 
 function ACproj(AC)
     χ, d, = size(AC)
-    U, S1, = svdfix(reshape(AC, χ, d * χ); fix = :U)
-    _, S2, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
-    S = (S1 .+ S2) ./ 2
-    ein"(ij, jkl), lm -> ikm"(U', AC, V), Diagonal(S)
+    U, = svdfix(reshape(AC, χ, d * χ); fix = :U)
+    _, _, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
+    ein"(ij, jkl), lm -> ikm"(U', AC, V)
 end
 
 struct UniformMPS <: Manifold end
@@ -161,7 +160,7 @@ function Optim.retract!(::UniformMPS, AC)
     AC .= ein"(ij, jkl), lm -> ikm"(L1, AC, L2') # this is not strictly necessary
 end
 
-function Optim.project_tangent!(::UniformMPS, dAC, AC; η = 1e-40)
+function Optim.project_tangent!(::UniformMPS, dAC, AC)
     χ, d, = size(AC)
     U1, _, V1 = svd(reshape(AC, χ, d * χ))
     U2, _, V2 = svd(reshape(AC, χ * d, χ))
@@ -173,7 +172,7 @@ function Optim.project_tangent!(::UniformMPS, dAC, AC; η = 1e-40)
     K1 = U1' * reshape(dAC, χ, d * χ) * V1
     K2 = U2' * reshape(dAC, χ * d, χ) * V2
     U, S, V = svd(M)
-    temp = V[:, 1 : end - 1] * (Diagonal(inv.(S[1 : end - 1])) * (U'[1 : end - 1, :] * diag(K1 .- K2)))
+    temp = V[:, 1 : end - 1] * (Diagonal(inv.(S[1 : end - 1])) * (U'[1 : end - 1, :] * real(diag(K1 .- K2))))
     dAC .-= reshape(U1 * Diagonal(temp) * V1', χ, d, χ) .- reshape(U2 * Diagonal(temp) * V2', χ, d, χ)
     dAC .-= AC .* real(dot(AC, dAC))
 end
@@ -239,10 +238,9 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
 
     function fg!(F, G, x)
         val, (dx,) = withgradient(x) do y
-            ac, c = ACproj(y)
-            L1, = polar(reshape(ac, χ * d, χ)) # fix later
-            L2, = polar(c) # fix later
-            real(local_energy(reshape(L1 * L2', χ, d, χ), ac, h))
+            ac = ACproj(y)
+            L, = polar(reshape(ac, χ * d, χ))
+            real(local_energy(reshape(L, χ, d, χ), ac, h))
         end
         if G !== nothing
             G .= dx
@@ -254,14 +252,12 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
     res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
 
     x = Optim.minimizer(res)
-    AC, C = ACproj(x)
-    L1, = polar(reshape(AC, χ * d, χ)) # fix later
-    L2, = polar(C) # fix later
-    AL = reshape(L1 * L2', χ, d, χ)
-    _, R1 = polar(reshape(AC, χ, d * χ); rev = true) # fix later
-    _, R2 = polar(C; rev = true) # fix later
-    AR = reshape(R2' * R1, χ, d, χ)
-    A = MixedCanonicalMPS(AL, AR, AC, Array(Complex.(C)))
+    AC = ACproj(x)
+    L, C = polar(reshape(AC, χ * d, χ))
+    AL = reshape(L, χ, d, χ)
+    _, R = polar(reshape(AC, χ, d * χ); rev = true)
+    AR = reshape(R, χ, d, χ)
+    A = MixedCanonicalMPS(AL, AR, AC, C)
 
     E = real(local_energy(A.AL, A.AC, h))
     if Hamiltonian
