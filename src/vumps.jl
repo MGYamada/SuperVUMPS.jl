@@ -36,21 +36,6 @@ function svd_back(A; η = 1e-40)
     end
 end
 
-function Sinkhorn!(A)
-    n = size(A, 1)
-    F = [exp(2π * im / n * (i - 1) * (j - 1)) / sqrt(n) for i in 1 : n, j in 1 : n]
-    U = F' * A * F
-    U[1, :] .= 0
-    U[:, 1] .= 0
-    U[1, 1] = 1
-    u, = polar(U[2 : end, 2 : end])
-    U[2 : end, 2 : end] .= u
-    Anew = F * U * F'
-    L = Anew * A'
-    A .= Anew
-    L
-end
-
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
     χ, d, = size(A)
     Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
@@ -125,7 +110,7 @@ function ACproj(AC)
     χ, d, = size(AC)
     U, = svdfix(reshape(AC, χ, d * χ); fix = :U)
     _, _, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
-    ein"(ij, jkl), lm -> ikm"(U', AC, V)
+    ein"(ij, jkl), lm -> ikm"(U', AC, V), U, V
 end
 
 struct UniformMPS <: Manifold end
@@ -155,9 +140,7 @@ function Optim.retract!(::UniformMPS, AC)
     AC .= ein"(ij, jkl), lm -> ikm"(U0, AC, V0')
     C .= U0 * C * V0'
     U, _, V = svdfix(C; fix = :U)
-    L1 = Sinkhorn!(U)
-    L2 = Sinkhorn!(V)
-    AC .= ein"(ij, jkl), lm -> ikm"(L1, AC, L2') # this is not strictly necessary
+    AC .= ein"(ij, jkl), lm -> ikm"(U', AC, V) # this is not strictly necessary
 end
 
 function Optim.project_tangent!(::UniformMPS, dAC, AC)
@@ -231,16 +214,16 @@ function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T
     HAC, HC_rtn
 end
 
-function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) where T
+function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false, β = 0.1) where T
     χ, d, = size(A.AL)
     U, _, V = svdfix(A.C; fix = :U)
     AC = ein"ij, (jkl, lm) -> ikm"(U', A.AC, V)
 
     function fg!(F, G, x)
         val, (dx,) = withgradient(x) do y
-            ac = ACproj(y)
+            ac, u, v = ACproj(y)
             L, = polar(reshape(ac, χ * d, χ))
-            real(local_energy(reshape(L, χ, d, χ), ac, h))
+            real(local_energy(reshape(L, χ, d, χ), ac, h)) + β / 2 * (norm(u - I) ^ 2 + norm(v - I) ^ 2)
         end
         if G !== nothing
             G .= dx
@@ -252,7 +235,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
     res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
 
     x = Optim.minimizer(res)
-    AC = ACproj(x)
+    AC, = ACproj(x)
     L, C = polar(reshape(AC, χ * d, χ))
     AL = reshape(L, χ, d, χ)
     _, R = polar(reshape(AC, χ, d * χ); rev = true)
