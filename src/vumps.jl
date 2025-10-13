@@ -110,7 +110,17 @@ function ACproj(AC)
     χ, d, = size(AC)
     U, = svdfix(reshape(AC, χ, d * χ); fix = :U)
     _, _, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
-    ein"(ij, jkl), lm -> ikm"(U', AC, V), U, V
+    ein"(ij, jkl), lm -> ikm"(U', AC, V), Sinkhorn(U), Sinkhorn(V)
+end
+
+function Sinkhorn(A)
+    n = size(A, 1)
+    F = [exp(2π * im / n * (i - 1) * (j - 1)) / sqrt(n) for i in 1 : n, j in 1 : n]
+    U1 = F' * A * F
+    U2 = [i == 1 && j == 1 ? one(eltype(A)) : (i == 1 || j == 1 ? zero(eltype(A)) : U1[i, j]) for i in 1 : n, j in 1 : n]
+    u, = polar(U2)
+    Anew = F * u * F'
+    Anew * A'
 end
 
 struct UniformMPS <: Manifold end
@@ -140,7 +150,9 @@ function Optim.retract!(::UniformMPS, AC)
     AC .= ein"(ij, jkl), lm -> ikm"(U0, AC, V0')
     C .= U0 * C * V0'
     U, _, V = svdfix(C; fix = :U)
-    AC .= ein"(ij, jkl), lm -> ikm"(U', AC, V) # this is not strictly necessary
+    L1 = Sinkhorn(U)
+    L2 = Sinkhorn(V)
+    AC .= ein"(ij, jkl), lm -> ikm"(L1, AC, L2') # this is not strictly necessary
 end
 
 function Optim.project_tangent!(::UniformMPS, dAC, AC)
@@ -214,7 +226,7 @@ function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T
     HAC, HC_rtn
 end
 
-function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false, β = 0.1) where T
+function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false, β = 1.0) where T
     χ, d, = size(A.AL)
     U, _, V = svdfix(A.C; fix = :U)
     AC = ein"ij, (jkl, lm) -> ikm"(U', A.AC, V)
