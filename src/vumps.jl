@@ -106,45 +106,6 @@ function svdfix(A; fix = :U)
     U, S, V
 end
 
-function fixedpoint(f, x0, args...; tol = 1e-14)
-    x = x0
-    while true
-        xnew = f(x, args...)
-        if norm(xnew .- x) < tol
-            return xnew
-        end
-        x .= xnew
-    end
-end
-
-Zygote.@adjoint function fixedpoint(f, x0, args...; tol = 1e-14)
-    x = fixedpoint(f, x0, args...; tol = tol)
-    x, function (Δ)
-        J = jacobian(f, x, args...)[1]
-        _, back = pullback(f, x, args...)
-        (nothing, nothing, back(pinv(I - J; atol = tol) * Δ)[2 : end]...)
-    end
-end
-
-function Sinkhorn(A; tol = 1e-14)
-    n, = size(A)
-    LR = (x -> vcat(real.(x), imag.(x)))(ones(eltype(A), 2n))
-    function next(lr, a)
-        temp = lr[1 : 2n] .+ im .* lr[2n + 1 : end]
-        l = temp[1 : n]
-        r = temp[n + 1 : end]
-        a = Diagonal(l) * a * Diagonal(r)
-        temp1 = map(x -> ϕ(x)', vec(sum(a; dims = 2)))
-        l = l .* temp1
-        temp2 = map(x -> ϕ(x)', vec(sum(Diagonal(temp1) * a; dims = 1)))
-        r = r .* temp2
-        (x -> vcat(real.(x), imag.(x)))(vcat(l, r))
-    end
-    LR = fixedpoint(next, LR, A; tol = tol)
-    rtn = LR[1 : 2n] .+ im .* LR[2n + 1 : end]
-    rtn[1 : n], rtn[n + 1 : end]
-end
-
 function Sinkhorn_fast(A)
     n = size(A, 1)
     F = [exp(2π * im / n * (i - 1) * (j - 1)) / sqrt(n) for i in 1 : n, j in 1 : n]
@@ -159,9 +120,6 @@ function ACproj(AC)
     χ, d, = size(AC)
     U, = svdfix(reshape(AC, χ, d * χ); fix = :U)
     _, _, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
-    L, R = Sinkhorn(V' * U) # essentially this is not necessary
-    U = U * Diagonal(R)
-    V = Diagonal(L)' * V
     ein"(ij, jkl), lm -> ikm"(U', AC, V)
 end
 
