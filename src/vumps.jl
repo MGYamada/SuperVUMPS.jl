@@ -129,20 +129,13 @@ function Optim.retract!(::UniformMPS, AC; tol = 1e-14)
     U0, = svdfix(reshape(AC, χ, d * χ); fix = :U)
     U, S, V0 = svdfix(reshape(AC, χ * d, χ); fix = :V)
     AL = ein"ij, jkl -> ikl"(U0', reshape(U, χ, d, χ))
-    while true
-        ac = ein"ijk, k -> ijk"(AL, S)
-        _, s, = svd(reshape(ac, χ, d * χ))
-        if norm(S .- s) < tol
-            break
-        end
-        S .= s
-    end
-    AC .= ein"ijk, k -> ijk"(AL, S)
-    U, = svdfix(reshape(AC, χ, d * χ); fix = :U)
-    AC .= ein"ij, jkl -> ikl"(U', AC)
-    U1 = Sinkhorn(U0)
-    V1 = Sinkhorn(V0)
-    AC .= ein"(ij, jkl), lm -> ikm"(U1, AC, V1')
+    C, = rightorth(AL, Matrix{eltype(AC)}(Diagonal(S)))
+    u, s, = svdfix(C; fix = :U)
+    AL .= ein"(ij, jkl), lm -> ikm"(u', AL, u)
+    AC .= ein"ijk, k -> ijk"(AL, s)
+    U0 .= Sinkhorn(U0)
+    V0 .= Sinkhorn(V0)
+    AC .= ein"(ij, jkl), lm -> ikm"(U0, AC, V0')
     AC ./= norm(AC)
 end
 
