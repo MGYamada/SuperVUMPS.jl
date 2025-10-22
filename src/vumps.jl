@@ -119,7 +119,8 @@ function Sinkhorn(A)
     U1 = F' * A * F
     U2 = [i == 1 && j == 1 ? one(eltype(A)) : (i == 1 || j == 1 ? zero(eltype(A)) : U1[i, j]) for i in 1 : n, j in 1 : n]
     u, = polar(U2)
-    F * u * F'
+    Anew = F * u * F'
+    Anew * A'
 end
 
 struct UniformMPS <: Manifold end
@@ -128,46 +129,31 @@ function Optim.retract!(::UniformMPS, AC; tol = 1e-12)
     χ, d, = size(AC)
     U0, = svdfix(reshape(AC, χ, d * χ); fix = :U)
     U, S, V0 = svdfix(reshape(AC, χ * d, χ); fix = :V)
-    AL = ein"ij, jkl -> ikl"(U0', reshape(U, χ, d, χ))
-    C, = rightorth(AL, Matrix{eltype(AC)}(Diagonal(S)); tol = tol)
-    u, s, = svdfix(C; fix = :U)
-    AL .= ein"(ij, jkl), lm -> ikm"(u', AL, u)
-    AC .= ein"ijk, k -> ijk"(AL, s)
-    U0 .= Sinkhorn(U0)
-    V0 .= Sinkhorn(V0)
-    AC .= ein"(ij, jkl), lm -> ikm"(U0, AC, V0')
-    AC ./= norm(AC)
+    AL = ein"ijk, kl -> ijl"(reshape(U, χ, d, χ), U0')
+    C0 = U0 * Diagonal(S) * V0'
+    C, = rightorth(AL, C0; tol = tol)
+    AC .= ein"ijk, kl -> ijl"(AL, C)
+    U, _, V = svdfix(C; fix = :U)
+    L1 = Sinkhorn(U)
+    L2 = Sinkhorn(V)
+    AC .= ein"(ij, jkl), lm -> ikm"(L1, AC, L2')
+    AC ./= norm(AC) # this is not strictly necessary
 end
 
-function Optim.project_tangent!(::UniformMPS, dAC, AC; η = 1e-40)
-    # O(χ⁴) algorithm by M. G. Yamada
+function Optim.project_tangent!(::UniformMPS, dAC, AC)
     χ, d, = size(AC)
-    U1, S1, V1 = svdfix(reshape(AC, χ, d * χ); fix = :U)
-    U2, S2, V2 = svdfix(reshape(AC, χ * d, χ); fix = :V)
-    S = (S1 .+ S2) ./ 2
-    S² = S .^ 2
-    F = S²' .- S²
-    @. F /= (F ^ 2 + η)
-    dU1 = U1 * (F .* (x -> x .+ x')(U1' * reshape(dAC, χ, d * χ) * V1 * Diagonal(S)))
-    dU1 .-= U1 * Diagonal(im .* imag.(vec(sum(dU1; dims = 1))))
-    dV2 = V2 * (F .* (x -> x .+ x')(Diagonal(S) * U2' * reshape(dAC, χ * d, χ) * V2))
-    dV2 .-= V2 * Diagonal(im .* imag.(vec(sum(dV2; dims = 1))))
-    x = vcat(real.(diag(U1' * reshape(dAC, χ, d * χ) * V1 .- U2' * reshape(dAC, χ * d, χ) * V2)), real.(vec(sum(dU1; dims = 1))), real.(vec(sum(dV2; dims = 1))))
-    A = zeros(3χ, 3χ)
-    function a(x)
-        dac = reshape(U1 * ((x -> x .+ x')(F .* (U1' * transpose(reshape(repeat(x[χ + 1 : 2χ], χ), χ, χ)))) * Diagonal(S) .+ Diagonal(x[1 : χ])) * V1', χ, d, χ) .+ reshape(U2 * (Diagonal(S) * (x -> x .+ x')(F .* (V2' * transpose(reshape(repeat(x[2χ + 1 : end], χ), χ, χ)))) .- Diagonal(x[1 : χ])) * V2', χ, d, χ)
-        du1 = U1 * (F .* (x -> x .+ x')(U1' * reshape(dac, χ, d * χ) * V1 * Diagonal(S)))
-        du1 .-= U1 * Diagonal(im .* imag.(vec(sum(du1; dims = 1))))
-        dv2 = V2 * (F .* (x -> x .+ x')(Diagonal(S) * U2' * reshape(dac, χ * d, χ) * V2))
-        dv2 .-= V2 * Diagonal(im .* imag.(vec(sum(dv2; dims = 1))))
-        vcat(real.(diag(U1' * reshape(dac, χ, d * χ) * V1 .- U2' * reshape(dac, χ * d, χ) * V2)), real.(vec(sum(du1; dims = 1))), real.(vec(sum(dv2; dims = 1))))
+    U1, _, V1 = svd(reshape(AC, χ, d * χ))
+    U2, _, V2 = svd(reshape(AC, χ * d, χ))
+    M = Matrix{eltype(AC)}(I, χ, χ)
+    for i in 1 : χ, j in 1 : χ
+        M[i, j] -= (transpose(U1[:, j]) * reshape(U2'[i, :], χ, d)) * (reshape(V1'[j, :], d, χ) * V2[:, i])
     end
-    for i in 1 : 3χ
-        A[:, i] .= a(Matrix{Float64}(I, 3χ, 3χ)[:, i])
-    end
-    U, s, V = svd(A)
-    temp = V[:, 1 : end - 3] * (Diagonal(inv.(s[1 : end - 3])) * (U[:, 1 : end - 3]' * x))
-    dAC .-= reshape(U1 * ((x -> x .+ x')(F .* (U1' * transpose(reshape(repeat(temp[χ + 1 : 2χ], χ), χ, χ)))) * Diagonal(S) .+ Diagonal(temp[1 : χ])) * V1', χ, d, χ) .+ reshape(U2 * (Diagonal(S) * (x -> x .+ x')(F .* (V2' * transpose(reshape(repeat(temp[2χ + 1 : end], χ), χ, χ)))) .- Diagonal(temp[1 : χ])) * V2', χ, d, χ)
+    M .+= M'
+    K1 = U1' * reshape(dAC, χ, d * χ) * V1
+    K2 = U2' * reshape(dAC, χ * d, χ) * V2
+    U, S, V = svd(M)
+    temp = V[:, 1 : end - 1] * (Diagonal(inv.(S[1 : end - 1])) * (U'[1 : end - 1, :] * real(diag(K1 .- K2))))
+    dAC .-= reshape(U1 * Diagonal(temp) * V1', χ, d, χ) .- reshape(U2 * Diagonal(temp) * V2', χ, d, χ)
     dAC .-= AC .* real(dot(AC, dAC))
 end
 
