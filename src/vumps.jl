@@ -52,16 +52,16 @@ function svdfix(A; fix = :U)
     U, S, V
 end
 
-function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
+function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, kwargs...)
     χ, d, = size(A)
     Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
     AL = Array(reshape(Q, χ, d, χ))
     λ = norm(R)
     R ./= λ
-    numiter = 1
-    while norm(C .- R) > tol && numiter < maxiter
+    δ = norm(C .- R)
+    while δ > tol
         ALbar = conj.(AL)
-        _, vecs = eigsolve(R, 1, :LR; ishermitian = false, tol = tol, verbosity = 0, kwargs...) do X
+        _, vecs = eigsolve(R, 1, :LR; ishermitian = false, tol = 1e-2δ, verbosity = 0, kwargs...) do X
             ein"(ij, ikl), jkm -> lm"(X, ALbar, A)
         end
         C = vecs[1]
@@ -70,7 +70,7 @@ function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-
         AL = reshape(Q, χ, d, χ)
         λ = norm(R)
         R ./= λ
-        numiter += 1
+        δ = norm(C .- R)
     end
     if eltype(A) <: Real
         real.(AL), real.(R), λ
@@ -79,16 +79,16 @@ function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-
     end
 end
 
-function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
+function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, kwargs...)
     χ, d, = size(A)
     L, Q = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
     AR = Array(reshape(Q, χ, d, χ))
     λ = norm(L)
     L ./= λ
-    numiter = 1
-    while norm(C .- L) > tol && numiter < maxiter
+    δ = norm(C .- L)
+    while δ > tol
         ARbar = conj.(AR)
-        _, vecs = eigsolve(L, 1, :LR; ishermitian = false, tol = tol, verbosity = 0, kwargs...) do X
+        _, vecs = eigsolve(L, 1, :LR; ishermitian = false, tol = 1e-2δ, verbosity = 0, kwargs...) do X
             ein"mkj, (lki, ji) -> ml"(A, ARbar, X)
         end
         C = vecs[1]
@@ -97,7 +97,7 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
         AR = reshape(Q, χ, d, χ)
         λ = norm(L)
         L ./= λ
-        numiter += 1
+        δ = norm(C .- L)
     end
     if eltype(A) <: Real
         real.(L), real.(AR), λ
@@ -124,12 +124,12 @@ end
 
 struct UniformMPS <: Manifold end
 
-function Optim.retract!(::UniformMPS, AC; tol = 1e-14)
+function Optim.retract!(::UniformMPS, AC; tol = 1e-12)
     χ, d, = size(AC)
     U0, = svdfix(reshape(AC, χ, d * χ); fix = :U)
     U, S, V0 = svdfix(reshape(AC, χ * d, χ); fix = :V)
     AL = ein"ij, jkl -> ikl"(U0', reshape(U, χ, d, χ))
-    C, = rightorth(AL, Matrix{eltype(AC)}(Diagonal(S)))
+    C, = rightorth(AL, Matrix{eltype(AC)}(Diagonal(S)); tol = tol)
     u, s, = svdfix(C; fix = :U)
     AL .= ein"(ij, jkl), lm -> ikm"(u', AL, u)
     AC .= ein"ijk, k -> ijk"(AL, s)
