@@ -36,6 +36,22 @@ function svd_back(A; η = 1e-40)
     end
 end
 
+ϕ(x) = iszero(x) ? one(x) : sign(x)
+
+function svdfix(A; fix = :U)
+    U, S, V = _svd(A)
+    if fix == :U
+        phase = map(x -> ϕ(x)', vec(sum(U; dims = 1)))
+        U = U * Diagonal(phase)
+        V = V * Diagonal(phase)
+    elseif fix == :V
+        phase = map(x -> ϕ(x)', vec(sum(V; dims = 1)))
+        U = U * Diagonal(phase)
+        V = V * Diagonal(phase)
+    end
+    U, S, V
+end
+
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
     χ, d, = size(A)
     Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
@@ -90,32 +106,6 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     end
 end
 
-ϕ(x) = iszero(x) ? one(x) : sign(x)
-
-function svdfix(A; fix = :U)
-    U, S, V = _svd(A)
-    if fix == :U
-        phase = map(x -> ϕ(x)', vec(sum(U; dims = 1)))
-        U = U * Diagonal(phase)
-        V = V * Diagonal(phase)
-    elseif fix == :V
-        phase = map(x -> ϕ(x)', vec(sum(V; dims = 1)))
-        U = U * Diagonal(phase)
-        V = V * Diagonal(phase)
-    end
-    U, S, V
-end
-
-function Sinkhorn_fast(A)
-    n = size(A, 1)
-    F = [exp(2π * im / n * (i - 1) * (j - 1)) / sqrt(n) for i in 1 : n, j in 1 : n]
-    U1 = F' * A * F
-    U2 = [i == 1 && j == 1 ? one(eltype(A)) : (i == 1 || j == 1 ? zero(eltype(A)) : U1[i, j]) for i in 1 : n, j in 1 : n]
-    u, = polar(U2)
-    Anew = F * u * F'
-    Anew * A'
-end
-
 function ACproj(AC)
     χ, d, = size(AC)
     U, = svdfix(reshape(AC, χ, d * χ); fix = :U)
@@ -123,41 +113,37 @@ function ACproj(AC)
     ein"(ij, jkl), lm -> ikm"(U', AC, V)
 end
 
+function Sinkhorn(A)
+    n = size(A, 1)
+    F = [exp(2π * im / n * (i - 1) * (j - 1)) / sqrt(n) for i in 1 : n, j in 1 : n]
+    U1 = F' * A * F
+    U2 = [i == 1 && j == 1 ? one(eltype(A)) : (i == 1 || j == 1 ? zero(eltype(A)) : U1[i, j]) for i in 1 : n, j in 1 : n]
+    u, = polar(U2)
+    F * u * F'
+end
+
 struct UniformMPS <: Manifold end
 
-function Optim.retract!(::UniformMPS, AC)
+function Optim.retract!(::UniformMPS, AC; tol = 1e-14)
     χ, d, = size(AC)
     U0, = svdfix(reshape(AC, χ, d * χ); fix = :U)
-    _, _, V0 = svdfix(reshape(AC, χ * d, χ); fix = :V)
-    L1 = Sinkhorn_fast(U0)
-    L2 = Sinkhorn_fast(V0)
-    AC .= ein"(ij, jkl), lm -> ikm"(L1, AC, L2')
-    U0, = svdfix(reshape(AC, χ, d * χ); fix = :U) # fix later
-    _, _, V0 = svdfix(reshape(AC, χ * d, χ); fix = :V) # fix later
-    AC .= ein"(ij, jkl), lm -> ikm"(U0', AC, V0)
-    AC1 = reshape(AC, χ * d, χ)
-    AC2 = Array(reshape(AC, χ, d * χ)')
-    U, V, Q, D1, D2, R0 = svd(AC1, AC2)
-    X = (R0 * Q') ./ sqrt(2)
-    W, C = polar(X)
-    AL = reshape((U * D1 * W) .* sqrt(2), χ, d, χ)
-    AR = reshape((V * D2 * W)' .* sqrt(2), χ, d, χ)
-    AL, L, = leftorth(AL)
-    AC .= ein"ij, jkl -> ikl"(L, AC)
-    C .= L * C
-    R, AR, = rightorth(AR)
-    AC .= ein"ijk, kl -> ijl"(AC, R)
-    C .= C * R
-    U, P = polar(C)
-    AC .= ein"ij, jkl -> ikl"(P, AR)
+    U, S, V0 = svdfix(reshape(AC, χ * d, χ); fix = :V)
+    AL = ein"ij, jkl -> ikl"(U0', reshape(U, χ, d, χ))
+    while true
+        ac = ein"ijk, k -> ijk"(AL, S)
+        _, s, = svd(reshape(ac, χ, d * χ))
+        if norm(S .- s) < tol
+            break
+        end
+        S .= s
+    end
+    AC .= ein"ijk, k -> ijk"(AL, S)
+    U, = svdfix(reshape(AC, χ, d * χ); fix = :U)
+    AC .= ein"ij, jkl -> ikl"(U', AC)
+    U1 = Sinkhorn(U0)
+    V1 = Sinkhorn(V0)
+    AC .= ein"(ij, jkl), lm -> ikm"(U1, AC, V1')
     AC ./= norm(AC)
-    C .= P
-    AC .= ein"(ij, jkl), lm -> ikm"(U0, AC, V0')
-    C .= U0 * C * V0'
-    U, _, V = svdfix(C; fix = :U)
-    L1 = Sinkhorn_fast(U)
-    L2 = Sinkhorn_fast(V)
-    AC .= ein"(ij, jkl), lm -> ikm"(L1, AC, L2')
 end
 
 function Optim.project_tangent!(::UniformMPS, dAC, AC; η = 1e-40)
