@@ -2,9 +2,13 @@
 
 Faster, more stable, and extremely simple.
 
+## Features
+
+* Finally, we achieved calculations without gauge fixing.
+* Avoiding the degenerate singular value problem by using only QR factorizations.
+
 ## TODO
 
-* Currently, the polar gauge is used, instead of the Sinkhorn gauge or the diagonal gauge.
 * Supporting non-Hermitian Hamiltonians
 * Supporting CUDA
 
