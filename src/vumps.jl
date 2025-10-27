@@ -32,15 +32,10 @@ Zygote.@adjoint function _qr(A)
     end
 end
 
-lqpos(A) = lqpos!(copy(A)) # fix later
-function lqpos!(A)
-    F = qr!(Matrix(A'))
-    Q = Matrix(Matrix(F.Q)')
-    L = Matrix(F.R')
+function lqpos(A)
+    L, Q = lq(A)
     phases = safesign.(diag(L))
-    lmul!(Diagonal(phases), Q)
-    rmul!(L, Diagonal(conj!(phases)))
-    L, Q
+    L * Diagonal(phases)', Diagonal(phases) * Q
 end
 
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, kwargs...)
