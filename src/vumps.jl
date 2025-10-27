@@ -2,18 +2,13 @@ safesign(x::Number) = iszero(x) ? one(x) : sign(x)
 copyltu(A) = tril(A, -1)' .+ tril(A, -1) .+ Diagonal(real(diag(A)))
 
 function qrpos(A)
-    Q, R = _qr(A)
+    Q, R = qr(A)
     phases = safesign.(diag(R))
     Q * Diagonal(phases), Diagonal(phases)' * R
 end
 
-function _qr(A) # to avoid piracy
-    Q, R = qr(A)
-    Matrix(Q), R
-end
-
-Zygote.@adjoint function _qr(A)
-    Q, R = _qr(A)
+Zygote.@adjoint function qrpos(A)
+    Q, R = qrpos(A)
     (Q, R), function (Δ)
         m, n = size(A)
         @assert m >= n
@@ -38,9 +33,18 @@ function lqpos(A)
     L * Diagonal(phases)', Diagonal(phases) * Q
 end
 
+function polar(A; rev = false)
+    U, S, V = svd(A)
+    if rev
+        U * Diagonal(S) * U', U * V'
+    else
+        U * V', V * Diagonal(S) * V'
+    end
+end
+
 function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, kwargs...)
     χ, d, = size(A)
-    Q, R = qrpos(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
+    Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
     AL = Array(reshape(Q, χ, d, χ))
     λ = norm(R)
     R ./= λ
@@ -51,8 +55,8 @@ function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-
             ein"(ij, ikl), jkm -> lm"(X, ALbar, A)
         end
         C = vecs[1]
-        _, C = qrpos(C)
-        Q, R = qrpos(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
+        _, C = polar(C)
+        Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
         AL = reshape(Q, χ, d, χ)
         λ = norm(R)
         R ./= λ
@@ -67,7 +71,7 @@ end
 
 function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, kwargs...)
     χ, d, = size(A)
-    L, Q = lqpos(reshape(reshape(A, χ * d, χ) * C, χ, d * χ))
+    L, Q = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
     AR = Array(reshape(Q, χ, d, χ))
     λ = norm(L)
     L ./= λ
@@ -78,8 +82,8 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
             ein"mkj, (lki, ji) -> ml"(A, ARbar, X)
         end
         C = vecs[1]
-        C, = lqpos(C)
-        L, Q = lqpos(reshape(reshape(A, χ * d, χ) * C, χ, d * χ))
+        C, = polar(C; rev = true)
+        L, Q = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
         AR = reshape(Q, χ, d, χ)
         λ = norm(L)
         L ./= λ
@@ -99,10 +103,9 @@ function Optim.retract!(::UniformMPS, x; tol = 1e-12)
     d -= 1
     AC = x[:, 1 : d, :]
     C = x[:, end, :]
-    L, Q = lqpos(C)
-    LAC, = qrpos(reshape(AC, χ * d, χ) * Q')
-    LC, = qrpos(C * Q')
-    AL = reshape(LAC * LC', χ, d, χ)
+    L, Q = polar(C; rev = true)
+    LAC, = polar(reshape(AC, χ * d, χ))
+    AL = reshape(LAC * Q', χ, d, χ)
     C, = rightorth(AL, L; tol = tol)
     C .= C * Q
     AC .= ein"ijk, kl -> ijl"(AL, C)
