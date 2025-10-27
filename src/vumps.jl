@@ -1,55 +1,38 @@
-function polar(A; rev = false)
-    U, S, V = _svd(A)
-    if rev
-        U * Diagonal(S) * U', U * V'
-    else
-        U * V', V * Diagonal(S) * V'
-    end
+safesign(x::Number) = iszero(x) ? one(x) : sign(x)
+copyltu(A) = tril(A, -1)' .+ tril(A, -1) .+ Diagonal(real(diag(A)))
+
+function qrpos(A)
+    Q, R = _qr(A)
+    phases = safesign.(diag(R))
+    Q * Diagonal(phases), Diagonal(phases)' * R
 end
 
-_svd(A) = svd(A) # to avoid piracy
-Zygote.@adjoint _svd(A) = svd_back(A)
+function _qr(A) # to avoid piracy
+    Q, R = qr(A)
+    Matrix(Q), R
+end
 
-function svd_back(A; η = 1e-40)
-    U, S, V = svd(A)
-    (U, S, V), function (Δ)
-        ΔA = Δ[2] === nothing ? zeros(eltype(A), size(A)...) : U * Diagonal(Δ[2]) * V'
-        if Δ[1] !== nothing || Δ[3] !== nothing
-            S² = S .^ 2
-            invS = @. S / (S² + η)
-            F = S²' .- S²
-            @. F /= (F ^ 2 + η)
-            if Δ[1] !== nothing
-                J = F .* (U' * Δ[1])
-                ΔA .+= U * (J .+ J') * Diagonal(S) * V'
-                ΔA .+= (I - U * U') * Δ[1] * Diagonal(invS) * V'
-            end
-            if Δ[3] !== nothing
-                K = F .* (V' * Δ[3])
-                ΔA .+= U * Diagonal(S) * (K .+ K') * V'
-                L = Diagonal(diag(V' * Δ[3]))
-                ΔA .+= 0.5 .* U * Diagonal(invS) * (L' .- L) * V'
-                ΔA .+= U * Diagonal(invS) * Δ[3]' * (I - V * V')
-            end
+Zygote.@adjoint function _qr(A)
+    Q, R = _qr(A)
+    (Q, R), function (Δ)
+        m, n = size(A)
+        @assert m >= n
+        ΔQ, ΔR = Δ
+        if ΔR === nothing
+            M = -ΔQ' * Q
+            ΔA = (ΔQ .+ Q * copyltu(M)) / R'
+        elseif ΔQ === nothing
+            M = R * ΔR'
+            ΔA = (Q * copyltu(M)) / R'
+        else
+            M = R * ΔR' .- ΔQ' * Q
+            ΔA = (ΔQ .+ Q * copyltu(M)) / R'
         end
         (ΔA,)
     end
 end
 
-safesign(x::Number) = iszero(x) ? one(x) : sign(x)
-
-qrpos(A) = qrpos!(copy(A))
-function qrpos!(A)
-    F = qr!(A)
-    Q = Matrix(F.Q)
-    R = F.R
-    phases = safesign.(diag(R))
-    rmul!(Q, Diagonal(phases))
-    lmul!(Diagonal(conj!(phases)), R)
-    Q, R
-end
-
-lqpos(A) = lqpos!(copy(A))
+lqpos(A) = lqpos!(copy(A)) # fix later
 function lqpos!(A)
     F = qr!(Matrix(A'))
     Q = Matrix(Matrix(F.Q)')
@@ -81,7 +64,7 @@ function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-
         δ = norm(C .- R)
     end
     if eltype(A) <: Real
-        real.(AL), real.(R), λ
+        real(AL), real(R), λ
     else
         AL, R, λ
     end
@@ -108,7 +91,7 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
         δ = norm(C .- L)
     end
     if eltype(A) <: Real
-        real.(L), real.(AR), λ
+        real(L), real(AR), λ
     else
         L, AR, λ
     end
@@ -121,8 +104,8 @@ function Optim.retract!(::UniformMPS, x; tol = 1e-12)
     d -= 1
     AC = x[:, 1 : d, :]
     C = x[:, end, :]
-    U, S, V = svd(C)
-    Cinv = V * Diagonal(inv.(S)) * U'
+    Q, R = qr(C)
+    Cinv = UpperTriangular(R) \ Q'
     AL = ein"ijk, kl -> ijl"(AC, Cinv)
     _, L, = leftorth(AL; tol = tol)
     AR = ein"ij, jkl -> ikl"(Cinv, AC)
@@ -143,42 +126,26 @@ function Optim.project_tangent!(::UniformMPS, dx, x; tol = 1e-12)
     C = x[:, end, :]
     dAC = dx[:, 1 : d, :]
     dC = dx[:, end, :]
-    U0, S0, V0 = svd(C)
-    U1, S1, V1 = svd(U0' * reshape(AC, χ, d * χ))
-    V1 .= V1 * U1'
-    U1 .= U0
-    U2, S2, V2 = svd(reshape(AC, χ * d, χ) * V0)
-    U2 .= U2 * V2'
-    V2 .= V0
-    sqrtS0 = sqrt.(S0)
-    invsqrtS0 = inv.(sqrtS0)
-    sqrtS1 = sqrt.(S1)
-    invsqrtS1 = inv.(sqrtS1)
-    sqrtS2 = sqrt.(S2)
-    invsqrtS2 = inv.(sqrtS2)
-    K01 = Diagonal(invsqrtS0) * (U0' * dC * V0) * Diagonal(sqrtS0)
-    K02 = Diagonal(invsqrtS0) * (V0' * dC' * U0) * Diagonal(sqrtS0)
-    K1 = Diagonal(invsqrtS1) * (U1' * reshape(dAC, χ, d * χ) * V1) * Diagonal(sqrtS1)
-    K2 = Diagonal(invsqrtS2) * (V2' * reshape(dAC, χ * d, χ)' * U2) * Diagonal(sqrtS2)
-    temp, = linsolve((x -> cat(real(x), imag(x); dims = 4))(cat(K01 .+ K01' .- (K1 .+ K1'), K02 .+ K02' .- (K2 .+ K2'); dims = 3)); ishermitian = true, isposdef = true, tol = tol, verbosity = 0) do x
+    dC1 = dC * C' .+ C * dC' .- (reshape(dAC, χ, d * χ) * reshape(AC, χ, d * χ)' .+ reshape(AC, χ, d * χ) * reshape(dAC, χ, d * χ)')
+    dC2 = dC' * C .+ C' * dC .- (reshape(dAC, χ * d, χ)' * reshape(AC, χ * d, χ) .+ reshape(AC, χ * d, χ)' * reshape(dAC, χ * d, χ))
+    temp, = linsolve((x -> cat(real(x), imag(x); dims = 4))(cat(dC1, dC2; dims = 3)); ishermitian = true, isposdef = true, tol = tol, verbosity = 0) do x
         h1 = x[:, :, 1, 1] .+ im .* x[:, :, 1, 2]
         h2 = x[:, :, 2, 1] .+ im .* x[:, :, 2, 2]
-        dc = U0 * (Diagonal(invsqrtS0) * (h1 .+ h1') * Diagonal(sqrtS0) .+ Diagonal(sqrtS0) * (h2 .+ h2') * Diagonal(invsqrtS0)) * V0' 
-        dac = -(reshape(U1 * (Diagonal(invsqrtS1) * (h1 .+ h1') * Diagonal(sqrtS1)) * V1', χ, d, χ) .+ reshape(U2 * (Diagonal(sqrtS2) * (h2 .+ h2') * Diagonal(invsqrtS2)) * V2', χ, d, χ))
-        k01 = Diagonal(invsqrtS0) * (U0' * dc * V0) * Diagonal(sqrtS0)
-        k02 = Diagonal(invsqrtS0) * (V0' * dc' * U0) * Diagonal(sqrtS0)
-        k1 = Diagonal(invsqrtS1) * (U1' * reshape(dac, χ, d * χ) * V1) * Diagonal(sqrtS1)
-        k2 = Diagonal(invsqrtS2) * (V2' * reshape(dac, χ * d, χ)' * U2) * Diagonal(sqrtS2)
-        (x -> cat(real(x), imag(x); dims = 4))(cat(k01 .+ k01' .- (k1 .+ k1'), k02 .+ k02' .- (k2 .+ k2'); dims = 3))
+        dc = (h1 .+ h1') * C .+ C * (h2 .+ h2')
+        dac = -(ein"ij, jkl -> ikl"(h1 .+ h1', AC) .+ ein"ijk, kl -> ijl"(AC, h2 .+ h2'))
+        dc1 = dc * C' .+ C * dc' .- (reshape(dac, χ, d * χ) * reshape(AC, χ, d * χ)' .+ reshape(AC, χ, d * χ) * reshape(dac, χ, d * χ)')
+        dc2 = dc' * C .+ C' * dc .- (reshape(dac, χ * d, χ)' * reshape(AC, χ * d, χ) .+ reshape(AC, χ * d, χ)' * reshape(dac, χ * d, χ))
+        (x -> cat(real(x), imag(x); dims = 4))(cat(dc1, dc2; dims = 3))
     end
     h1 = temp[:, :, 1, 1] .+ im .* temp[:, :, 1, 2]
     h2 = temp[:, :, 2, 1] .+ im .* temp[:, :, 2, 2]
-    dC .-= U0 * (Diagonal(invsqrtS0) * (h1 .+ h1') * Diagonal(sqrtS0) .+ Diagonal(sqrtS0) * (h2 .+ h2') * Diagonal(invsqrtS0)) * V0' 
-    dAC .+= reshape(U1 * (Diagonal(invsqrtS1) * (h1 .+ h1') * Diagonal(sqrtS1)) * V1', χ, d, χ) .+ reshape(U2 * (Diagonal(sqrtS2) * (h2 .+ h2') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
+    dC .-= (h1 .+ h1') * C .+ C * (h2 .+ h2')
+    dAC .+= ein"ij, jkl -> ikl"(h1 .+ h1', AC) .+ ein"ijk, kl -> ijl"(AC, h2 .+ h2')
     dC .-= C .* real(dot(C, dC))
     dAC .-= AC .* real(dot(AC, dAC))
     dx[:, 1 : d, :] .= dAC
     dx[:, end, :] .= dC
+    dx
 end
 
 struct MixedCanonicalMPS{T <: Complex}
@@ -241,8 +208,8 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
         val, (dx,) = withgradient(x) do y
             ac = y[:, 1 : d, :]
             c = y[:, end, :]
-            lac, = polar(reshape(ac, χ * d, χ))
-            lc, = polar(c)
+            lac, = qrpos(reshape(ac, χ * d, χ))
+            lc, = qrpos(c)
             al = reshape(lac * lc', χ, d, χ)
             real(local_energy(al, ac, h))
         end
@@ -255,11 +222,15 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
     end
     res = optimize(Optim.only_fg!(fg!), cat(A.AC, reshape(A.C, χ, 1, χ); dims = 2), LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
 
-    AC .= Optim.minimizer(res)
-    L, C = polar(reshape(AC, χ * d, χ))
-    AL = reshape(L, χ, d, χ)
-    _, R = polar(reshape(AC, χ, d * χ); rev = true)
-    AR = reshape(R, χ, d, χ)
+    x = Optim.minimizer(res)
+    AC = x[:, 1 : d, :]
+    C = x[:, end, :]
+    LAC, = qrpos(reshape(AC, χ * d, χ))
+    LC, = qrpos(C)
+    AL = reshape(LAC * LC', χ, d, χ)
+    _, RAC = lqpos(reshape(AC, χ, χ * d))
+    _, RC = lqpos(C)
+    AR = reshape(RC' * RAC, χ, d, χ)
     A = MixedCanonicalMPS(AL, AR, AC, C)
 
     E = real(local_energy(A.AL, A.AC, h))
