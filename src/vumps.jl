@@ -95,20 +95,15 @@ end
 struct UniformMPS <: Manifold end
 
 function Optim.retract!(::UniformMPS, x; tol = 1e-12)
-    _, d, = size(x)
+    χ, d, = size(x)
     d -= 1
     AC = x[:, 1 : d, :]
     C = x[:, end, :]
-    Q, R = qr(C)
-    Cinv = UpperTriangular(R) \ Q'
-    AL = ein"ijk, kl -> ijl"(AC, Cinv)
-    _, L, = leftorth(AL; tol = tol)
-    AR = ein"ij, jkl -> ikl"(Cinv, AC)
-    R, = rightorth(AR; tol = tol)
-    AC .= ein"ij, (jkl, lm) -> ikm"(L, AC, R)
-    C .= L * C * R
-    AC ./= norm(AC)
-    C ./= norm(C)
+    LAC, = qrpos(reshape(AC, χ * d, χ))
+    LC, = qrpos(C)
+    AL = reshape(LAC * LC', χ, d, χ)
+    C, = rightorth(AL, C; tol = tol)
+    AC .= ein"ijk, kl -> ijl"(AL, C)
     x[:, 1 : d, :] .= AC
     x[:, end, :] .= C
     x
