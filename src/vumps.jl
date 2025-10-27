@@ -99,10 +99,12 @@ function Optim.retract!(::UniformMPS, x; tol = 1e-12)
     d -= 1
     AC = x[:, 1 : d, :]
     C = x[:, end, :]
-    LAC, = qrpos(reshape(AC, χ * d, χ))
-    LC, = qrpos(C)
+    L, Q = lqpos(C)
+    LAC, = qrpos(reshape(AC, χ * d, χ) * Q')
+    LC, = qrpos(C * Q')
     AL = reshape(LAC * LC', χ, d, χ)
-    C, = rightorth(AL, C; tol = tol)
+    C, = rightorth(AL, L; tol = tol)
+    C .= C * Q
     AC .= ein"ijk, kl -> ijl"(AL, C)
     x[:, 1 : d, :] .= AC
     x[:, end, :] .= C
