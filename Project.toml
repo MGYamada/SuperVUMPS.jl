@@ -1,7 +1,7 @@
 name = "SuperVUMPS"
 uuid = "251f20e1-0c2c-4c9f-ab3f-16280b56c0f4"
 authors = ["MGYamada <myspinor@gmail.com>"]
-version = "1.2.0"
+version = "1.2.1"
 
 [deps]
 KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"

@@ -4,7 +4,7 @@ Faster, more stable, and extremely simple.
 
 ## TODO
 
-* Currently, the polar gauge is used, instead of the Sinkhorn gauge or the diagonal gauge.
+* Finally, we achieved calculations without gauge fixing.
 * Supporting non-Hermitian Hamiltonians
 * Supporting CUDA
 
