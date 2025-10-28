@@ -15,13 +15,13 @@ Zygote.@adjoint function qrpos(A)
         ΔQ, ΔR = Δ
         if ΔR === nothing
             M = -ΔQ' * Q
-            ΔA = (ΔQ .+ Q * copyltu(M)) / R'
+            ΔA = (ΔQ .+ Q * copyltu(M)) / UpperTriangular(R)'
         elseif ΔQ === nothing
             M = R * ΔR'
-            ΔA = (Q * copyltu(M)) / R'
+            ΔA = (Q * copyltu(M)) / UpperTriangular(R)'
         else
             M = R * ΔR' .- ΔQ' * Q
-            ΔA = (ΔQ .+ Q * copyltu(M)) / R'
+            ΔA = (ΔQ .+ Q * copyltu(M)) / UpperTriangular(R)'
         end
         (ΔA,)
     end
@@ -103,11 +103,11 @@ function Optim.retract!(::UniformMPS, x; tol = 1e-12)
     d -= 1
     AC = x[:, 1 : d, :]
     C = x[:, end, :]
-    L, Q = polar(C; rev = true)
-    LAC, = polar(reshape(AC, χ * d, χ))
-    AL = reshape(LAC * Q', χ, d, χ)
-    C, = rightorth(AL, L; tol = tol)
-    C .= C * Q
+    LAC, = qrpos(reshape(AC, χ * d, χ))
+    LC, = qrpos(C)
+    AL = reshape(LAC * LC', χ, d, χ)
+    C, = rightorth(AL, C; tol = tol)
+    C ./= norm(C)
     AC .= ein"ijk, kl -> ijl"(AL, C)
     x[:, 1 : d, :] .= AC
     x[:, end, :] .= C
