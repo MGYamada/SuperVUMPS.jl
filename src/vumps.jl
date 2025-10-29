@@ -108,7 +108,7 @@ end
 
 struct UniformMPS <: Manifold end
 
-function Optim.retract!(::UniformMPS, AC; tol = 1e-14)
+function Optim.retract!(::UniformMPS, AC; tol = 1e-12)
     χ, d, = size(AC)
     L, C = polar(reshape(AC, χ * d, χ))
     AL = reshape(L, χ, d, χ)
@@ -117,7 +117,7 @@ function Optim.retract!(::UniformMPS, AC; tol = 1e-14)
     AC ./= norm(AC)
 end
 
-function Optim.project_tangent!(::UniformMPS, dAC, AC; tol = 1e-14)
+function Optim.project_tangent!(::UniformMPS, dAC, AC; tol = 1e-12)
     χ, d, = size(AC)
     U1, S1, V1 = svd(reshape(AC, χ, d * χ))
     U2, S2, V2 = svd(reshape(AC, χ * d, χ) * U1)
