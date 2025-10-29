@@ -60,7 +60,7 @@ function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-
     R ./= λ
     δ = norm(C .- R)
     while δ > tol
-        ALbar = conj.(AL)
+        ALbar = conj(AL)
         _, vecs = eigsolve(R, 1, :LR; ishermitian = false, tol = 1e-2δ, verbosity = 0, kwargs...) do X
             ein"(ij, ikl), jkm -> lm"(X, ALbar, A)
         end
@@ -87,7 +87,7 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     L ./= λ
     δ = norm(C .- L)
     while δ > tol
-        ARbar = conj.(AR)
+        ARbar = conj(AR)
         _, vecs = eigsolve(L, 1, :LR; ishermitian = false, tol = 1e-2δ, verbosity = 0, kwargs...) do X
             ein"mkj, (lki, ji) -> ml"(A, ARbar, X)
         end
@@ -174,11 +174,11 @@ function canonicalMPS(T, χ, d)
     MixedCanonicalMPS(AL, AR, AC, C)
 end
 
-conjugateMPS(A) = MixedCanonicalMPS(conj.(A.AL), conj.(A.AR), conj.(A.AC), conj.(A.C))
+conjugateMPS(A) = MixedCanonicalMPS(conj(A.AL), conj(A.AR), conj(A.AC), conj(A.C))
 
-local_energy(AL, AC, h::Array{T, 4}) where T = ein"ijk, (klm, (jlno, (inp, pom))) -> "(conj.(AL), conj.(AC), h, AL, AC)[]
-local_energy(AL, AC, h::Array{T, 6}) where T = ein"ijk, (klm, (mno, (jlnpqr, (ips, (sqt, tro))))) -> "(conj.(AL), conj.(AL), conj.(AC), h, AL, AL, AC)[]
-local_energy(AL, AC, h::Array{T, 8}) where T = ein"ijk, (klm, (mno, (opq, (jlnprstu, (irv, (vsw, (wtx, xuq))))))) -> "(conj.(AL), conj.(AL), conj.(AL), conj.(AC), h, AL, AL, AL, AC)[]
+local_energy(AL, AC, h::Array{T, 4}) where T = ein"ijk, (klm, (jlno, (inp, pom))) -> "(conj(AL), conj(AC), h, AL, AC)[]
+local_energy(AL, AC, h::Array{T, 6}) where T = ein"ijk, (klm, (mno, (jlnpqr, (ips, (sqt, tro))))) -> "(conj(AL), conj(AL), conj(AC), h, AL, AL, AC)[]
+local_energy(AL, AC, h::Array{T, 8}) where T = ein"ijk, (klm, (mno, (opq, (jlnprstu, (irv, (vsw, (wtx, xuq))))))) -> "(conj(AL), conj(AL), conj(AL), conj(AC), h, AL, AL, AL, AC)[]
 
 function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T
     χ, d, = size(A.AL)
@@ -213,7 +213,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
             return val
         end
     end
-    res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
+    res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS(), linesearch = Static(), alphaguess = InitialStatic(alpha = 0.1)), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
 
     AC .= Optim.minimizer(res)
     L, C = polar(reshape(AC, χ * d, χ))
