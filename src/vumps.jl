@@ -1,5 +1,5 @@
 function polar(A; rev = false)
-    U, S, V = svd(A; alg = LinearAlgebra.QRIteration())
+    U, S, V = svd(A)
     if rev
         U * Diagonal(S) * U', U * V'
     else
@@ -8,7 +8,7 @@ function polar(A; rev = false)
 end
 
 Zygote.@adjoint function polar(A; rev = false)
-    U, S, V = svd(A; alg = LinearAlgebra.QRIteration())
+    U, S, V = svd(A)
     if rev
         d = size(A, 1)
         P, Q = U * Diagonal(S) * U', U * V'
@@ -119,8 +119,8 @@ end
 
 function Optim.project_tangent!(::UniformMPS, dAC, AC; tol = 1e-12)
     χ, d, = size(AC)
-    U1, S1, V1 = svd(reshape(AC, χ, d * χ); alg = LinearAlgebra.QRIteration())
-    U2, S2, V2 = svd(reshape(AC, χ * d, χ) * U1; alg = LinearAlgebra.QRIteration())
+    U1, S1, V1 = svd(reshape(AC, χ, d * χ))
+    U2, S2, V2 = svd(reshape(AC, χ * d, χ) * U1)
     U2 .= U2 * V2'
     V2 .= U1
     sqrtS1 = sqrt.(S1)
@@ -197,7 +197,7 @@ end
 
 function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) where T
     χ, d, = size(A.AL)
-    U, _, V = svd(A.C; alg = LinearAlgebra.QRIteration())
+    U, _, V = svd(A.C)
     AC = ein"ij, (jkl, lm) -> ikm"(U', A.AC, V)
 
     function fg!(F, G, x)
