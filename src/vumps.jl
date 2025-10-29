@@ -52,14 +52,15 @@ Zygote.@adjoint function polar(A; rev = false)
     end
 end
 
-function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, kwargs...)
+function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
     χ, d, = size(A)
     Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
     AL = Array(reshape(Q, χ, d, χ))
     λ = norm(R)
     R ./= λ
     δ = norm(C .- R)
-    while δ > tol
+    numiter = 1
+    while δ > tol && numiter < maxiter
         ALbar = conj(AL)
         _, vecs = eigsolve(R, 1, :LR; ishermitian = false, tol = 1e-2δ, verbosity = 0, kwargs...) do X
             ein"(ij, ikl), jkm -> lm"(X, ALbar, A)
@@ -71,6 +72,7 @@ function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-
         λ = norm(R)
         R ./= λ
         δ = norm(C .- R)
+        numiter += 1
     end
     if eltype(A) <: Real
         real(AL), real(R), λ
@@ -79,14 +81,15 @@ function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-
     end
 end
 
-function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, kwargs...)
+function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
     χ, d, = size(A)
     L, Q = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
     AR = Array(reshape(Q, χ, d, χ))
     λ = norm(L)
     L ./= λ
     δ = norm(C .- L)
-    while δ > tol
+    numiter = 1
+    while δ > tol && numiter < maxiter
         ARbar = conj(AR)
         _, vecs = eigsolve(L, 1, :LR; ishermitian = false, tol = 1e-2δ, verbosity = 0, kwargs...) do X
             ein"mkj, (lki, ji) -> ml"(A, ARbar, X)
@@ -98,6 +101,7 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
         λ = norm(L)
         L ./= λ
         δ = norm(C .- L)
+        numiter += 1
     end
     if eltype(A) <: Real
         real(L), real(AR), λ
