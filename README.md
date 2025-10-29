@@ -5,7 +5,7 @@ Faster, more stable, and extremely simple.
 ## Features
 
 * Finally, we achieved calculations without gauge fixing.
-* Avoiding the degenerate singular value problem by using only QR factorizations.
+* No derivative of SVD, avoiding the degenerate singular value problem.
 
 ## TODO
 
