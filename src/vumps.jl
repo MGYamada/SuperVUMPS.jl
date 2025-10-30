@@ -25,7 +25,7 @@ Zygote.@adjoint function polar(A; rev = false)
             if Δ[1] !== nothing
                 ΔP += Δ[1]
             end
-            ΔAA = sylvester(P, P, -ΔP)
+            ΔAA = U * ((U' * ΔP * U) ./ (S .+ S')) * U'
             ΔA += (ΔAA .+ ΔAA') * A
             (ΔA,)
         end
@@ -45,7 +45,7 @@ Zygote.@adjoint function polar(A; rev = false)
             if Δ[2] !== nothing
                 ΔP += Δ[2]
             end
-            ΔAA = sylvester(P, P, -ΔP)
+            ΔAA = V * ((V' * ΔP * V) ./ (S .+ S')) * V'
             ΔA += A * (ΔAA .+ ΔAA')
             (ΔA,)
         end
