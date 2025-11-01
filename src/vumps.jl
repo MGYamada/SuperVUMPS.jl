@@ -52,62 +52,30 @@ Zygote.@adjoint function polar(A; rev = false)
     end
 end
 
-function leftorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
+function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-12, offset = 1e-4, maxiter = 100, kwargs...)
+    # The largest eigenvalue of the transfer matrix is assumed to be 1.
     χ, d, = size(A)
-    Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
-    AL = Array(reshape(Q, χ, d, χ))
-    λ = norm(R)
-    R ./= λ
-    δ = norm(C .- R)
-    numiter = 1
-    while δ > tol && numiter < maxiter
-        ALbar = conj(AL)
-        _, vecs = eigsolve(R, 1, :LR; ishermitian = false, tol = 1e-2δ, verbosity = 0, kwargs...) do X
-            ein"(ij, ikl), jkm -> lm"(X, ALbar, A)
+    Abar = conj(A)
+    _, vecs1 = eigsolve(C * C', 1, :LR; ishermitian = false, tol = 1e-2tol, verbosity = 0, kwargs...) do X
+        ein"ijk, (ljm, mk) -> li"(Abar, A, X)
+    end
+    ρ = vecs1[1]
+    U, S, = svd(ρ)
+    C = U * Diagonal(sqrt.(S)) * U'
+    C ./= norm(C)
+    L, R = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
+    numiter = 0
+    while norm(L .- C) > tol && numiter < maxiter
+        ρ, = linsolve(L * L'; ishermitian = false, tol = tol, verbosity = 0) do X
+            (1.0 + offset) .* X .- ein"ijk, (ljm, mk) -> li"(Abar, A, X)
         end
-        C = vecs[1]
-        _, C = polar(C)
-        Q, R = polar(reshape(C * reshape(A, χ, d * χ), χ * d, χ))
-        AL = reshape(Q, χ, d, χ)
-        λ = norm(R)
-        R ./= λ
-        δ = norm(C .- R)
+        U, S, = svd(ρ)
+        C = U * Diagonal(sqrt.(S)) * U'
+        C ./= norm(C)
+        L, R = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
         numiter += 1
     end
-    if eltype(A) <: Real
-        real(AL), real(R), λ
-    else
-        AL, R, λ
-    end
-end
-
-function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
-    χ, d, = size(A)
-    L, Q = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
-    AR = Array(reshape(Q, χ, d, χ))
-    λ = norm(L)
-    L ./= λ
-    δ = norm(C .- L)
-    numiter = 1
-    while δ > tol && numiter < maxiter
-        ARbar = conj(AR)
-        _, vecs = eigsolve(L, 1, :LR; ishermitian = false, tol = 1e-2δ, verbosity = 0, kwargs...) do X
-            ein"mkj, (lki, ji) -> ml"(A, ARbar, X)
-        end
-        C = vecs[1]
-        C, = polar(C; rev = true)
-        L, Q = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
-        AR = reshape(Q, χ, d, χ)
-        λ = norm(L)
-        L ./= λ
-        δ = norm(C .- L)
-        numiter += 1
-    end
-    if eltype(A) <: Real
-        real(L), real(AR), λ
-    else
-        L, AR, λ
-    end
+    L, Array(reshape(R, χ, d, χ))
 end
 
 struct UniformMPS <: Manifold end
@@ -171,9 +139,9 @@ function regularize_right(AR, ARbar, C, Cbar, h, χ; tol = 1e-12)
 end
 
 function canonicalMPS(T, χ, d)
-    A = randn(T, χ, d, χ)
-    AL, = leftorth(A)
-    C, AR, = rightorth(AL)
+    U, _, V = svd(randn(T, χ * d, χ))
+    AL = Array(reshape(U * V', χ, d, χ))
+    C, AR = rightorth(AL)
     AC = ein"ijk, kl -> ijl"(AL, C)
     MixedCanonicalMPS(AL, AR, AC, C)
 end
