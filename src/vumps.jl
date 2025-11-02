@@ -52,8 +52,7 @@ Zygote.@adjoint function polar(A; rev = false)
     end
 end
 
-function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-12, offset = 1e-4, maxiter = 100, kwargs...)
-    # The largest eigenvalue of the transfer matrix is assumed to be 1.
+function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-12, maxiter = 100, kwargs...)
     χ, d, = size(A)
     Abar = conj(A)
     _, vecs1 = eigsolve(C * C', 1, :LR; ishermitian = false, tol = 1e-2tol, verbosity = 0, kwargs...) do X
@@ -64,18 +63,23 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     C = U * Diagonal(sqrt.(S)) * U'
     C ./= norm(C)
     L, R = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
+    AR = Array(reshape(R, χ, d, χ))
+    δ = norm(C .- L)
     numiter = 0
-    while norm(L .- C) > tol && numiter < maxiter
-        ρ, = linsolve(L * L'; ishermitian = false, tol = tol, verbosity = 0) do X
-            (1.0 + offset) .* X .- ein"ijk, (ljm, mk) -> li"(Abar, A, X)
+    while δ > tol && numiter < maxiter
+        ARbar = conj(AR)
+        _, vecs = eigsolve(L, 1, :LR; ishermitian = false, tol = 1e-2δ, verbosity = 0, kwargs...) do X
+            ein"ijk, (ljm, mk) -> li"(ARbar, A, X)
         end
-        U, S, = svd(ρ)
-        C = U * Diagonal(sqrt.(S)) * U'
-        C ./= norm(C)
+        C = vecs[1]
+        C, = polar(C; rev = true)
         L, R = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
+        AR = reshape(R, χ, d, χ)
+        L ./= norm(L)
+        δ = norm(C .- L)
         numiter += 1
     end
-    L, Array(reshape(R, χ, d, χ))
+    L, AR
 end
 
 struct UniformMPS <: Manifold end
