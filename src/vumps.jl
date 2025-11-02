@@ -74,7 +74,7 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
         C = vecs[1]
         C, = polar(C; rev = true)
         L, R = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
-        AR = reshape(R, χ, d, χ)
+        AR .= reshape(R, χ, d, χ)
         L ./= norm(L)
         δ = norm(C .- L)
         numiter += 1
