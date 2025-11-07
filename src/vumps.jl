@@ -52,12 +52,15 @@ Zygote.@adjoint function polar(A; rev = false)
     end
 end
 
-function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14)
+function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-12)
     χ, d, = size(A)
     L = copy(C)
-    f(X) = (x -> cat(real(x), imag(x); dims = 3))(X[:, :, 1] .+ im .* X[:, :, 2] .- polar(reshape(reshape(A, χ * d, χ) * (X[:, :, 1] .+ im .* X[:, :, 2]), χ, d * χ); rev = true)[1])
-    while norm(f((x -> cat(real(x), imag(x); dims = 3))(L))) > tol
-        L .-= (x -> x[:, :, 1] .+ im .* x[:, :, 2])(reshape(jacobian(f, (x -> cat(real(x), imag(x); dims = 3))(L))[1] \ vec(f((x -> cat(real(x), imag(x); dims = 3))(L))), χ, χ, 2))
+    f(X) = X * X' .- ein"ijk, (ljm, mk) -> li"(conj(A), A, X * X')
+    while norm(f(L)) > tol
+        dL, = linsolve(f(L); tol = 1e-2tol, maxiter = 1000, verbosity = 0) do x
+            x * L' .+ L * x' .- ein"ijk, (ljm, mk) -> li"(conj(A), A, x * L' .+ L * x')
+        end
+        L .-= dL
         U, S, V = svd(L)
         L .= U * Diagonal(S) * U'
         L ./= norm(L)
@@ -68,7 +71,7 @@ end
 
 struct UniformMPS <: Manifold end
 
-function Optim.retract!(::UniformMPS, AC; tol = 1e-14)
+function Optim.retract!(::UniformMPS, AC; tol = 1e-12)
     χ, d, = size(AC)
     L, C = polar(reshape(AC, χ * d, χ))
     AL = reshape(L, χ, d, χ)
@@ -77,7 +80,7 @@ function Optim.retract!(::UniformMPS, AC; tol = 1e-14)
     AC ./= norm(AC)
 end
 
-function Optim.project_tangent!(::UniformMPS, dAC, AC; tol = 1e-14)
+function Optim.project_tangent!(::UniformMPS, dAC, AC; tol = 1e-12)
     χ, d, = size(AC)
     U1, S1, V1 = svd(reshape(AC, χ, d * χ))
     U2, S2, V2 = svd(reshape(AC, χ * d, χ) * U1)
