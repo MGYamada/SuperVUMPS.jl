@@ -52,69 +52,28 @@ Zygote.@adjoint function polar(A; rev = false)
     end
 end
 
-function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
+function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14)
     χ, d, = size(A)
-    Abar = conj(A)
-    _, vecs1 = eigsolve(C * C', 1, :LR; ishermitian = false, tol = tol, verbosity = 0, kwargs...) do X
-        ein"ijk, (ljm, mk) -> li"(Abar, A, X)
-    end
-    ρ = vecs1[1]
-    U, S, = svd(ρ)
-    C = U * Diagonal(sqrt.(S)) * U'
-    C ./= norm(C)
-    L, R = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
-    AR = Array(reshape(R, χ, d, χ))
-    δ = norm(C .- L)
-    numiter = 0
-    while δ > tol && numiter < maxiter
-        ARbar = conj(AR)
-        _, vecs = eigsolve(L, 1, :LR; ishermitian = false, tol = 1e-2δ, verbosity = 0, kwargs...) do X
-            ein"ijk, (ljm, mk) -> li"(ARbar, A, X)
-        end
-        C = vecs[1]
-        C, = polar(C; rev = true)
-        L, R = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
-        AR .= reshape(R, χ, d, χ)
+    L = copy(C)
+    f(X) = (x -> cat(real(x), imag(x); dims = 3))(X[:, :, 1] .+ im .* X[:, :, 2] .- polar(reshape(reshape(A, χ * d, χ) * (X[:, :, 1] .+ im .* X[:, :, 2]), χ, d * χ); rev = true)[1])
+    while norm(f((x -> cat(real(x), imag(x); dims = 3))(L))) > tol
+        L .-= (x -> x[:, :, 1] .+ im .* x[:, :, 2])(reshape(jacobian(f, (x -> cat(real(x), imag(x); dims = 3))(L))[1] \ vec(f((x -> cat(real(x), imag(x); dims = 3))(L))), χ, χ, 2))
+        U, S, V = svd(L)
+        L .= U * Diagonal(S) * U'
         L ./= norm(L)
-        δ = norm(C .- L)
-        numiter += 1
     end
-    L, AR
-end
-
-safesign(x) = iszero(x) ? one(x) : sign(x)
-
-function svdfix(A; fix = :U)
-    U, S, V = svd(A)
-    if fix == :U
-        phase = map(x -> safesign(x)', vec(sum(U; dims = 1)))
-        U = U * Diagonal(phase)
-        V = V * Diagonal(phase)
-    elseif fix == :V
-        phase = map(x -> safesign(x)', vec(sum(V; dims = 1)))
-        U = U * Diagonal(phase)
-        V = V * Diagonal(phase)
-    end
-    U, S, V
+    _, R = polar(reshape(reshape(A, χ * d, χ) * L, χ, d * χ); rev = true)
+    L, Array(reshape(R, χ, d, χ))
 end
 
 struct UniformMPS <: Manifold end
 
 function Optim.retract!(::UniformMPS, AC; tol = 1e-14)
     χ, d, = size(AC)
-    U0, = svdfix(reshape(AC, χ, d * χ); fix = :U)
-    U, S, V0 = svdfix(reshape(AC, χ * d, χ); fix = :V)
-    AL = ein"ij, jkl -> ikl"(U0', reshape(U, χ, d, χ))
-    f(X) = X .- svdvals(reshape(ein"ijk, k -> ijk"(AL, X), χ, d * χ))
-    while norm(f(S)) > tol
-        S .-= jacobian(f, S)[1] \ f(S)
-        @. S = abs(S)
-        S ./= norm(S)
-    end
-    AC .= ein"ijk, k -> ijk"(AL, S)
-    U, = svdfix(reshape(AC, χ, d * χ); fix = :U)
-    AC .= ein"ij, jkl -> ikl"(U', AC)
-    AC .= ein"ij, (jkl, lm) -> ikm"(U0, AC, U0')
+    L, C = polar(reshape(AC, χ * d, χ))
+    AL = reshape(L, χ, d, χ)
+    C, = rightorth(AL, C; tol = tol)
+    AC .= ein"ijk, kl -> ijl"(AL, C)
     AC ./= norm(AC)
 end
 
@@ -133,9 +92,9 @@ function Optim.project_tangent!(::UniformMPS, dAC, AC; tol = 1e-14)
     temp, = linsolve((x -> cat(real(x), imag(x); dims = 3))(K1 .+ K1' .- (K2 .+ K2')); ishermitian = true, isposdef = true, tol = tol, verbosity = 0) do x
         h = x[:, :, 1] .+ im .* x[:, :, 2]
         dac = reshape(U1 * (Diagonal(invsqrtS1) * (h .+ h') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (h .+ h') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
-        K1 = Diagonal(invsqrtS1) * (U1' * reshape(dac, χ, d * χ) * V1) * Diagonal(sqrtS1)
-        K2 = Diagonal(invsqrtS2) * (V2' * reshape(dac, χ * d, χ)' * U2) * Diagonal(sqrtS2)
-        (x -> cat(real(x), imag(x); dims = 3))(K1 .+ K1' .- (K2 .+ K2'))
+        k1 = Diagonal(invsqrtS1) * (U1' * reshape(dac, χ, d * χ) * V1) * Diagonal(sqrtS1)
+        k2 = Diagonal(invsqrtS2) * (V2' * reshape(dac, χ * d, χ)' * U2) * Diagonal(sqrtS2)
+        (x -> cat(real(x), imag(x); dims = 3))(k1 .+ k1' .- (k2 .+ k2'))
     end
     h = temp[:, :, 1] .+ im .* temp[:, :, 2]
     dAC .-= reshape(U1 * (Diagonal(invsqrtS1) * (h .+ h') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (h .+ h') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
