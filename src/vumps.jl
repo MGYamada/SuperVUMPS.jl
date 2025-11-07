@@ -52,10 +52,10 @@ Zygote.@adjoint function polar(A; rev = false)
     end
 end
 
-function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-12, maxiter = 100, kwargs...)
+function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-14, maxiter = 100, kwargs...)
     χ, d, = size(A)
     Abar = conj(A)
-    _, vecs1 = eigsolve(C * C', 1, :LR; ishermitian = false, tol = 1e-2tol, verbosity = 0, kwargs...) do X
+    _, vecs1 = eigsolve(C * C', 1, :LR; ishermitian = false, tol = tol, verbosity = 0, kwargs...) do X
         ein"ijk, (ljm, mk) -> li"(Abar, A, X)
     end
     ρ = vecs1[1]
@@ -82,18 +82,43 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     L, AR
 end
 
+safesign(x) = iszero(x) ? one(x) : sign(x)
+
+function svdfix(A; fix = :U)
+    U, S, V = svd(A)
+    if fix == :U
+        phase = map(x -> safesign(x)', vec(sum(U; dims = 1)))
+        U = U * Diagonal(phase)
+        V = V * Diagonal(phase)
+    elseif fix == :V
+        phase = map(x -> safesign(x)', vec(sum(V; dims = 1)))
+        U = U * Diagonal(phase)
+        V = V * Diagonal(phase)
+    end
+    U, S, V
+end
+
 struct UniformMPS <: Manifold end
 
-function Optim.retract!(::UniformMPS, AC; tol = 1e-12)
+function Optim.retract!(::UniformMPS, AC; tol = 1e-14)
     χ, d, = size(AC)
-    L, C = polar(reshape(AC, χ * d, χ))
-    AL = reshape(L, χ, d, χ)
-    C, = rightorth(AL, C; tol = tol)
-    AC .= ein"ijk, kl -> ijl"(AL, C)
+    U0, = svdfix(reshape(AC, χ, d * χ); fix = :U)
+    U, S, V0 = svdfix(reshape(AC, χ * d, χ); fix = :V)
+    AL = ein"ij, jkl -> ikl"(U0', reshape(U, χ, d, χ))
+    f(X) = X .- svdvals(reshape(ein"ijk, k -> ijk"(AL, X), χ, d * χ))
+    while norm(f(S)) > tol
+        S .-= jacobian(f, S)[1] \ f(S)
+        @. S = abs(S)
+        S ./= norm(S)
+    end
+    AC .= ein"ijk, k -> ijk"(AL, S)
+    U, = svdfix(reshape(AC, χ, d * χ); fix = :U)
+    AC .= ein"ij, jkl -> ikl"(U', AC)
+    AC .= ein"ij, (jkl, lm) -> ikm"(U0, AC, U0')
     AC ./= norm(AC)
 end
 
-function Optim.project_tangent!(::UniformMPS, dAC, AC; tol = 1e-12)
+function Optim.project_tangent!(::UniformMPS, dAC, AC; tol = 1e-14)
     χ, d, = size(AC)
     U1, S1, V1 = svd(reshape(AC, χ, d * χ))
     U2, S2, V2 = svd(reshape(AC, χ * d, χ) * U1)
@@ -178,7 +203,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
 
     function fg!(F, G, x)
         val, (dx,) = withgradient(x) do ac
-            l, c = polar(reshape(ac, χ * d, χ))
+            l, = polar(reshape(ac, χ * d, χ))
             al = reshape(l, χ, d, χ)
             real(local_energy(al, ac, h))
         end
