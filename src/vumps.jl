@@ -52,34 +52,21 @@ Zygote.@adjoint function polar(A; rev = false)
     end
 end
 
-function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-12, maxiter = 100, kwargs...)
+function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-12)
     χ, d, = size(A)
-    Abar = conj(A)
-    _, vecs1 = eigsolve(C * C', 1, :LR; ishermitian = false, tol = 1e-2tol, verbosity = 0, kwargs...) do X
-        ein"ijk, (ljm, mk) -> li"(Abar, A, X)
-    end
-    ρ = vecs1[1]
-    U, S, = svd(ρ)
-    C = U * Diagonal(sqrt.(S)) * U'
-    C ./= norm(C)
-    L, R = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
-    AR = Array(reshape(R, χ, d, χ))
-    δ = norm(C .- L)
-    numiter = 0
-    while δ > tol && numiter < maxiter
-        ARbar = conj(AR)
-        _, vecs = eigsolve(L, 1, :LR; ishermitian = false, tol = 1e-2δ, verbosity = 0, kwargs...) do X
-            ein"ijk, (ljm, mk) -> li"(ARbar, A, X)
+    L = copy(C)
+    f(X) = X * X' .- ein"ijk, (ljm, mk) -> li"(conj(A), A, X * X')
+    while norm(f(L)) > tol
+        dL, = linsolve(f(L); tol = 1e-2tol, maxiter = 1000, verbosity = 0) do x
+            x * L' .+ L * x' .- ein"ijk, (ljm, mk) -> li"(conj(A), A, x * L' .+ L * x')
         end
-        C = vecs[1]
-        C, = polar(C; rev = true)
-        L, R = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
-        AR .= reshape(R, χ, d, χ)
+        L .-= dL
+        U, S, V = svd(L)
+        L .= U * Diagonal(S) * U'
         L ./= norm(L)
-        δ = norm(C .- L)
-        numiter += 1
     end
-    L, AR
+    _, R = polar(reshape(reshape(A, χ * d, χ) * L, χ, d * χ); rev = true)
+    L, Array(reshape(R, χ, d, χ))
 end
 
 struct UniformMPS <: Manifold end
@@ -108,9 +95,9 @@ function Optim.project_tangent!(::UniformMPS, dAC, AC; tol = 1e-12)
     temp, = linsolve((x -> cat(real(x), imag(x); dims = 3))(K1 .+ K1' .- (K2 .+ K2')); ishermitian = true, isposdef = true, tol = tol, verbosity = 0) do x
         h = x[:, :, 1] .+ im .* x[:, :, 2]
         dac = reshape(U1 * (Diagonal(invsqrtS1) * (h .+ h') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (h .+ h') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
-        K1 = Diagonal(invsqrtS1) * (U1' * reshape(dac, χ, d * χ) * V1) * Diagonal(sqrtS1)
-        K2 = Diagonal(invsqrtS2) * (V2' * reshape(dac, χ * d, χ)' * U2) * Diagonal(sqrtS2)
-        (x -> cat(real(x), imag(x); dims = 3))(K1 .+ K1' .- (K2 .+ K2'))
+        k1 = Diagonal(invsqrtS1) * (U1' * reshape(dac, χ, d * χ) * V1) * Diagonal(sqrtS1)
+        k2 = Diagonal(invsqrtS2) * (V2' * reshape(dac, χ * d, χ)' * U2) * Diagonal(sqrtS2)
+        (x -> cat(real(x), imag(x); dims = 3))(k1 .+ k1' .- (k2 .+ k2'))
     end
     h = temp[:, :, 1] .+ im .* temp[:, :, 2]
     dAC .-= reshape(U1 * (Diagonal(invsqrtS1) * (h .+ h') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (h .+ h') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
@@ -178,7 +165,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
 
     function fg!(F, G, x)
         val, (dx,) = withgradient(x) do ac
-            l, c = polar(reshape(ac, χ * d, χ))
+            l, = polar(reshape(ac, χ * d, χ))
             al = reshape(l, χ, d, χ)
             real(local_energy(al, ac, h))
         end
