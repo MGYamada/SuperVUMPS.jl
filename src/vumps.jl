@@ -55,12 +55,13 @@ end
 function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-12)
     χ, d, = size(A)
     L = copy(C)
-    f(X) = X * X' .- ein"ijk, (ljm, mk) -> li"(conj(A), A, X * X')
+    f(X) = X .- polar(reshape(reshape(A, χ * d, χ) * X, χ, d * χ); rev = true)[1]
     while norm(f(L)) > tol
-        dL, = linsolve(f(L); tol = 1e-2tol, maxiter = 1000, verbosity = 0) do x
-            x * L' .+ L * x' .- ein"ijk, (ljm, mk) -> li"(conj(A), A, x * L' .+ L * x')
+        u, s, v = svd(reshape(reshape(A, χ * d, χ) * L, χ, d * χ))
+        dL, = linsolve((x -> cat(real(x), imag(x); dims = 3))(f(L)); tol = 1e-2tol, verbosity = 0) do x
+            (x -> cat(real(x), imag(x); dims = 3))(x[:, :, 1] .+ im .* x[:, :, 2] .- u * ((u' * ein"ijk, (ljm, mk) -> li"(conj(A), A, (x[:, :, 1] .+ im .* x[:, :, 2]) * L' .+ L * (x[:, :, 1] .+ im .* x[:, :, 2])') * u) ./ (s .+ s')) * u')
         end
-        L .-= dL
+        L .-= dL[:, :, 1] .+ im .* dL[:, :, 2]
         U, S, V = svd(L)
         L .= U * Diagonal(S) * U'
         L ./= norm(L)
