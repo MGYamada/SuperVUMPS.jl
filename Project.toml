@@ -1,6 +1,6 @@
 name = "SuperVUMPS"
 uuid = "251f20e1-0c2c-4c9f-ab3f-16280b56c0f4"
-version = "1.5.3"
+version = "1.5.4"
 authors = ["MGYamada <myspinor@gmail.com>"]
 
 [deps]
