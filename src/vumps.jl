@@ -52,11 +52,19 @@ Zygote.@adjoint function polar(A; rev = false)
     end
 end
 
-function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-12)
+function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-12, maxiter = 100)
     χ, d, = size(A)
-    L = copy(C)
+    Abar = conj(A)
+    _, vecs1 = eigsolve(C * C', 1, :LR; ishermitian = false, tol = 1e-2tol, verbosity = 0) do X
+        ein"ijk, (ljm, mk) -> li"(Abar, A, X)
+    end
+    ρ = vecs1[1]
+    U, S, = svd(ρ)
+    L = U * Diagonal(sqrt.(S)) * U'
+    L ./= norm(L)
     f(X) = X .- polar(reshape(reshape(A, χ * d, χ) * X, χ, d * χ); rev = true)[1]
-    while norm(f(L)) > tol
+    numiter = 0
+    while norm(f(L)) > tol && numiter < maxiter
         u, s, v = svd(reshape(reshape(A, χ * d, χ) * L, χ, d * χ))
         dL, = linsolve((x -> cat(real(x), imag(x); dims = 3))(f(L)); tol = 1e-2tol, verbosity = 0) do x
             (x -> cat(real(x), imag(x); dims = 3))(x[:, :, 1] .+ im .* x[:, :, 2] .- u * ((u' * ein"ijk, (ljm, mk) -> li"(conj(A), A, (x[:, :, 1] .+ im .* x[:, :, 2]) * L' .+ L * (x[:, :, 1] .+ im .* x[:, :, 2])') * u) ./ (s .+ s')) * u')
@@ -65,6 +73,7 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
         U, S, V = svd(L)
         L .= U * Diagonal(S) * U'
         L ./= norm(L)
+        numiter += 1
     end
     _, R = polar(reshape(reshape(A, χ * d, χ) * L, χ, d * χ); rev = true)
     L, Array(reshape(R, χ, d, χ))
