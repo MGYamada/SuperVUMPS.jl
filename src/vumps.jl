@@ -55,7 +55,7 @@ end
 function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-12, offset = 1e-8, maxiter = 100)
     χ, d, = size(A)
     Abar = conj(A)
-    _, vecs1 = eigsolve(C * C', 1, :LR; ishermitian = false, tol = 1e-2tol, verbosity = 0) do X
+    _, vecs1 = eigsolve(C * C', 1, :LR; ishermitian = false, tol = tol, krylovdim = 100, verbosity = 0) do X
         ein"ijk, (ljm, mk) -> li"(Abar, A, X)
     end
     ρ = vecs1[1]
@@ -67,7 +67,7 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     while norm(f(L)) > tol && numiter < maxiter
         u, s, v = svd(reshape(reshape(A, χ * d, χ) * L, χ, d * χ))
         dL, = linsolve((x -> cat(real(x), imag(x); dims = 3))(f(L)); tol = 1e-2tol, verbosity = 0) do x
-            (x -> cat(real(x), imag(x); dims = 3))((1.0 + offset) .* (x[:, :, 1] .+ im .* x[:, :, 2]) .- u * ((u' * ein"ijk, (ljm, mk) -> li"(conj(A), A, (x[:, :, 1] .+ im .* x[:, :, 2]) * L' .+ L * (x[:, :, 1] .+ im .* x[:, :, 2])') * u) ./ (s .+ s')) * u')
+            (x -> cat(real(x), imag(x); dims = 3))((1.0 + offset) .* (x[:, :, 1] .+ im .* x[:, :, 2]) .- u * ((u' * ein"ijk, (ljm, mk) -> li"(Abar, A, (x[:, :, 1] .+ im .* x[:, :, 2]) * L' .+ L * (x[:, :, 1] .+ im .* x[:, :, 2])') * u) ./ (s .+ s')) * u')
         end
         L .-= dL[:, :, 1] .+ im .* dL[:, :, 2]
         U, S, V = svd(L)
