@@ -4,7 +4,7 @@ Faster, more stable, and extremely simple.
 
 ## Features
 
-* The polar gauge (C is Hermitian positive definite) should be the best gauge.
+* Now no gauge fixing is needed.
 * No derivative of SVD, avoiding the degenerate singular value problem.
 
 ## TODO
