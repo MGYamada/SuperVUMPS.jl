@@ -79,39 +79,74 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     L, Array(reshape(R, χ, d, χ))
 end
 
+safesign(x::Number) = iszero(x) ? one(x) : sign(x)
+
 struct UniformMPS <: Manifold end
 
-function Optim.retract!(::UniformMPS, AC; tol = 1e-12)
-    χ, d, = size(AC)
-    L, C = polar(reshape(AC, χ * d, χ))
-    AL = reshape(L, χ, d, χ)
-    C, = rightorth(AL, C; tol = tol)
-    AC .= ein"ijk, kl -> ijl"(AL, C)
-    AC ./= norm(AC)
+function Optim.retract!(::UniformMPS, x; tol = 1e-14)
+    χ, d, = size(x)
+    d -= 1
+    AC = reshape(x[:, 1 : end - 1, :], χ, d, χ)
+    C = reshape(x[:, end, :], χ, χ)
+    U, S, V = svd(reshape(AC, χ * d, χ))
+    f(X) = X .- svdvals(reshape(U * Diagonal(X) * V', χ, d * χ))
+    while norm(f(S)) > tol
+        S .-= jacobian(f, S)[1] \ f(S)
+        @. S = abs(S)
+        S ./= norm(S)
+    end
+    AC .= reshape(U * Diagonal(S) * V', χ, d, χ)
+    U, = svd(reshape(AC, χ, d * χ))
+    s = S .* safesign.(diag(U' * C * V))
+    C .= U * Diagonal(s) * V'
+    x[:, 1 : end - 1, :] .= AC
+    x[:, end, :] .= C
+    x
 end
 
-function Optim.project_tangent!(::UniformMPS, dAC, AC; tol = 1e-12)
-    χ, d, = size(AC)
-    U1, S1, V1 = svd(reshape(AC, χ, d * χ))
-    U2, S2, V2 = svd(reshape(AC, χ * d, χ) * U1)
+function Optim.project_tangent!(::UniformMPS, dx, x; tol = 1e-14)
+    χ, d, = size(x)
+    d -= 1
+    AC = reshape(x[:, 1 : end - 1, :], χ, d, χ)
+    dAC = reshape(dx[:, 1 : end - 1, :], χ, d, χ)
+    C = reshape(x[:, end, :], χ, χ)
+    dC = reshape(dx[:, end, :], χ, χ)
+    U0, S0, V0 = svd(C)
+    U1, S1, V1 = svd(U0' * reshape(AC, χ, d * χ))
+    V1 .= V1 * U1'
+    U1 .= U0
+    U2, S2, V2 = svd(reshape(AC, χ * d, χ) * V0)
     U2 .= U2 * V2'
-    V2 .= U1
+    V2 .= V0
+    sqrtS0 = sqrt.(S0)
+    invsqrtS0 = inv.(sqrtS0)
     sqrtS1 = sqrt.(S1)
     invsqrtS1 = inv.(sqrtS1)
     sqrtS2 = sqrt.(S2)
     invsqrtS2 = inv.(sqrtS2)
+    K01 = Diagonal(invsqrtS0) * (U0' * dC * V0) * Diagonal(sqrtS0)
+    K02 = Diagonal(invsqrtS0) * (V0' * dC' * U0) * Diagonal(sqrtS0)
     K1 = Diagonal(invsqrtS1) * (U1' * reshape(dAC, χ, d * χ) * V1) * Diagonal(sqrtS1)
     K2 = Diagonal(invsqrtS2) * (V2' * reshape(dAC, χ * d, χ)' * U2) * Diagonal(sqrtS2)
-    temp, = linsolve((x -> cat(real(x), imag(x); dims = 3))(K1 .+ K1' .- (K2 .+ K2')); ishermitian = true, isposdef = true, tol = tol, verbosity = 0) do x
-        h = x[:, :, 1] .+ im .* x[:, :, 2]
-        dac = reshape(U1 * (Diagonal(invsqrtS1) * (h .+ h') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (h .+ h') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
+    temp, = linsolve((x -> cat(real(x), imag(x); dims = 4))(cat(K01 .+ K01' .- (K1 .+ K1'), K02 .+ K02' .- (K2 .+ K2'); dims = 3)); ishermitian = true, isposdef = true, tol = tol, verbosity = 0) do x
+        g = x[:, :, 1, 1] .+ im .* x[:, :, 1, 2]
+        h = x[:, :, 2, 1] .+ im .* x[:, :, 2, 2]
+        dc = U0 * (Diagonal(invsqrtS0) * (g .+ g') * Diagonal(sqrtS0)) * V0' .+ U0 * (Diagonal(sqrtS0) * (h .+ h') * Diagonal(invsqrtS0)) * V0'
+        dac = -reshape(U1 * (Diagonal(invsqrtS1) * (g .+ g') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (h .+ h') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
+        k01 = Diagonal(invsqrtS0) * (U0' * dc * V0) * Diagonal(sqrtS0)
+        k02 = Diagonal(invsqrtS0) * (V0' * dc' * U0) * Diagonal(sqrtS0)
         k1 = Diagonal(invsqrtS1) * (U1' * reshape(dac, χ, d * χ) * V1) * Diagonal(sqrtS1)
         k2 = Diagonal(invsqrtS2) * (V2' * reshape(dac, χ * d, χ)' * U2) * Diagonal(sqrtS2)
-        (x -> cat(real(x), imag(x); dims = 3))(k1 .+ k1' .- (k2 .+ k2'))
+        (x -> cat(real(x), imag(x); dims = 4))(cat(k01 .+ k01' .- (k1 .+ k1'), k02 .+ k02' .- (k2 .+ k2'); dims = 3))
     end
-    h = temp[:, :, 1] .+ im .* temp[:, :, 2]
-    dAC .-= reshape(U1 * (Diagonal(invsqrtS1) * (h .+ h') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (h .+ h') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
+    g = temp[:, :, 1, 1] .+ im .* temp[:, :, 1, 2]
+    h = temp[:, :, 2, 1] .+ im .* temp[:, :, 2, 2]
+    dC .-= U0 * (Diagonal(invsqrtS0) * (g .+ g') * Diagonal(sqrtS0)) * V0' .+ U0 * (Diagonal(sqrtS0) * (h .+ h') * Diagonal(invsqrtS0)) * V0'
+    dAC .+= reshape(U1 * (Diagonal(invsqrtS1) * (g .+ g') * Diagonal(sqrtS1)) * V1', χ, d, χ) .+ reshape(U2 * (Diagonal(sqrtS2) * (h .+ h') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
     dAC .-= AC .* real(dot(AC, dAC))
+    dC .-= C .* real(dot(C, dC))
+    dx[:, 1 : end - 1, :] .= dAC
+    dx[:, end, :] .= dC
 end
 
 struct MixedCanonicalMPS{T <: Complex}
@@ -170,13 +205,16 @@ end
 
 function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) where T
     χ, d, = size(A.AL)
-    U, _, V = svd(A.C)
+    U, S, V = svd(A.C)
     AC = ein"ij, (jkl, lm) -> ikm"(U', A.AC, V)
 
     function fg!(F, G, x)
-        val, (dx,) = withgradient(x) do ac
-            l, = polar(reshape(ac, χ * d, χ))
-            al = reshape(l, χ, d, χ)
+        val, (dx,) = withgradient(x) do y
+            ac = reshape(y[:, 1 : end - 1, :], χ, d, χ)
+            c = reshape(y[:, end, :], χ, χ)
+            lac, = polar(reshape(ac, χ * d, χ))
+            lc, = polar(c)
+            al = reshape(lac * lc', χ, d, χ)
             real(local_energy(al, ac, h))
         end
         if G !== nothing
@@ -186,13 +224,17 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
             return val
         end
     end
-    res = optimize(Optim.only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
+    res = optimize(Optim.only_fg!(fg!), cat(AC, reshape(Diagonal(S), χ, 1, χ); dims = 2), LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
 
-    AC .= Optim.minimizer(res)
-    L, C = polar(reshape(AC, χ * d, χ))
-    AL = reshape(L, χ, d, χ)
-    _, R = polar(reshape(AC, χ, d * χ); rev = true)
-    AR = reshape(R, χ, d, χ)
+    x = Optim.minimizer(res)
+    AC .= reshape(x[:, 1 : end - 1, :], χ, d, χ)
+    C = reshape(x[:, end, :], χ, χ)
+    LAC, = polar(reshape(AC, χ * d, χ))
+    LC, = polar(C)
+    AL = reshape(LAC * LC', χ, d, χ)
+    _, RAC = polar(reshape(AC, χ, d * χ); rev = true)
+    _, RC = polar(C; rev = true)
+    AR = reshape(RC' * RAC, χ, d, χ)
     A = MixedCanonicalMPS(AL, AR, AC, C)
 
     E = real(local_energy(A.AL, A.AC, h))
