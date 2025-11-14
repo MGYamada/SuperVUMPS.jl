@@ -83,7 +83,7 @@ safesign(x::Number) = iszero(x) ? one(x) : sign(x)
 
 struct UniformMPS <: Manifold end
 
-function Optim.retract!(::UniformMPS, x; tol = 1e-14)
+function Optim.retract!(::UniformMPS, x; tol = 1e-12)
     χ, d, = size(x)
     d -= 1
     AC = reshape(x[:, 1 : end - 1, :], χ, d, χ)
@@ -104,7 +104,7 @@ function Optim.retract!(::UniformMPS, x; tol = 1e-14)
     x
 end
 
-function Optim.project_tangent!(::UniformMPS, dx, x; tol = 1e-14)
+function Optim.project_tangent!(::UniformMPS, dx, x; tol = 1e-12)
     χ, d, = size(x)
     d -= 1
     AC = reshape(x[:, 1 : end - 1, :], χ, d, χ)
