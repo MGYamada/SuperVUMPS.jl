@@ -83,7 +83,7 @@ safesign(x::Number) = iszero(x) ? one(x) : sign(x)
 
 struct UniformMPS <: Manifold end
 
-function Optim.retract!(::UniformMPS, x; tol = 1e-14)
+function Optim.retract!(::UniformMPS, x; tol = 1e-12)
     χ, d, = size(x)
     d -= 1
     AC = x[:, 1 : end - 1, :]
@@ -97,14 +97,14 @@ function Optim.retract!(::UniformMPS, x; tol = 1e-14)
     end
     AC .= reshape(U * Diagonal(S) * V', χ, d, χ)
     U, = svd(reshape(AC, χ, d * χ))
-    s = S .* safesign.(eigvals(U' * C * V; sortby = x -> -abs(x)))
+    s = S .* safesign.(diag(U' * C * V))
     C .= U * Diagonal(s) * V'
     x[:, 1 : end - 1, :] .= AC
     x[:, end, :] .= C
     x
 end
 
-function Optim.project_tangent!(::UniformMPS, dx, x; tol = 1e-14)
+function Optim.project_tangent!(::UniformMPS, dx, x; tol = 1e-12)
     χ, d, = size(x)
     d -= 1
     AC = x[:, 1 : end - 1, :]
@@ -207,7 +207,7 @@ function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) whe
             return val
         end
     end
-    res = optimize(Optim.only_fg!(fg!), cat(AC, reshape(Diagonal(S), χ, 1, χ); dims = 2), LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
+    res = optimize(Optim.only_fg!(fg!), cat(AC, reshape(Diagonal(S), χ, 1, χ); dims = 2), LBFGS(manifold = UniformMPS(), linesearch = Static(), alphaguess = InitialStatic(alpha = 0.1)), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
 
     x = Optim.minimizer(res)
     AC .= x[:, 1 : end - 1, :]
