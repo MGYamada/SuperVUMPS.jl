@@ -97,8 +97,7 @@ function Optim.retract!(::UniformMPS, x; tol = 1e-14)
     end
     AC .= reshape(U * Diagonal(S) * V', χ, d, χ)
     U, = svd(reshape(AC, χ, d * χ))
-    Sp = U' * C * V
-    s = S .* safesign.(vec(sum(Sp; dims = 1)) .+ vec(sum(Sp; dims = 2)))
+    s = S .* safesign.(eigvals(U' * C * V; sortby = x -> -abs(x)))
     C .= U * Diagonal(s) * V'
     x[:, 1 : end - 1, :] .= AC
     x[:, end, :] .= C
