@@ -4,8 +4,7 @@ Faster, more stable, and extremely simple.
 
 ## Features
 
-* Now no gauge fixing is needed.
-* No derivative of SVD, avoiding the degenerate singular value problem.
+* Finally, the hybrid gauge (polar gauge and Sinkhorn gauge) is used.
 
 ## TODO
 
