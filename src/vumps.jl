@@ -79,21 +79,6 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     L, Array(reshape(R, χ, d, χ))
 end
 
-function Sinkhorn!(A)
-    n = size(A, 1)
-    F = [exp(2π * im / n * (i - 1) * (j - 1)) / sqrt(n) for i in 1 : n, j in 1 : n]
-    U = F' * A * F
-    U[1, :] .= 0
-    U[:, 1] .= 0
-    U[1, 1] = 1
-    u, = polar(U[2 : end, 2 : end])
-    U[2 : end, 2 : end] .= u
-    Anew = F * U * F'
-    L = Anew * A'
-    A .= Anew
-    L
-end
-
 safesign(x::Number) = iszero(x) ? one(x) : sign(x)
 
 function svdfix(A; fix = :U)
@@ -124,39 +109,30 @@ function Optim.retract!(::UniformMPS, AC; tol = 1e-12)
     end
     AC .= reshape(U * Diagonal(S) * V', χ, d, χ)
     U, = svdfix(reshape(AC, χ, d * χ); fix = :U)
-    L1 = Sinkhorn!(U)
-    AC .= ein"ij, (jkl, lm) -> ikm"(L1, AC, V * U')
+    AC .= ein"ijk, kl -> ijl"(AC, V * U')
 end
 
-function Optim.project_tangent!(::UniformMPS, dAC, AC; tol = 1e-12, η = 1e-40)
+function Optim.project_tangent!(::UniformMPS, dAC, AC; tol = 1e-12)
     χ, d, = size(AC)
-    U1, S1, V1 = svdfix(reshape(AC, χ, d * χ); fix = :U)
-    U2, S2, V2 = svdfix(reshape(AC, χ * d, χ); fix = :V)
-    S = (S1 .+ S2) ./ 2
-    S² = S .^ 2
-    F = S²' .- S²
-    @. F /= (F ^ 2 + η)
-    dU1 = U1 * (F .* (x -> x .+ x')(U1' * reshape(dAC, χ, d * χ) * V1 * Diagonal(S)))
-    dU1 .-= U1 * Diagonal(im .* imag.(vec(sum(dU1; dims = 1))))
+    U1, S1, V1 = svd(reshape(AC, χ, d * χ))
+    U2, S2, V2 = svd(reshape(AC, χ * d, χ) * U1)
+    U2 .= U2 * V2'
+    V2 .= U1
     sqrtS1 = sqrt.(S1)
     invsqrtS1 = inv.(sqrtS1)
     sqrtS2 = sqrt.(S2)
     invsqrtS2 = inv.(sqrtS2)
     K1 = Diagonal(invsqrtS1) * (U1' * reshape(dAC, χ, d * χ) * V1) * Diagonal(sqrtS1)
     K2 = Diagonal(invsqrtS2) * (V2' * reshape(dAC, χ * d, χ)' * U2) * Diagonal(sqrtS2)
-    x, = linsolve(vcat(real(vec(sum(dU1; dims = 1))), vec((x -> cat(real(x), imag(x); dims = 3))(K1 .+ K1' .- (K2 .+ K2')))); ishermitian = true, isposdef = true, tol = tol, verbosity = 0) do x
-        y = reshape(x[χ + 1 : end], χ, χ, 2)
-        h = y[:, :, 1] .+ im .* y[:, :, 2]
-        dac = reshape(U1 * ((x -> x .+ x')(F .* (U1' * transpose(reshape(repeat(x[1 : χ], χ), χ, χ)))) * Diagonal(S)) * V1', χ, d, χ) .+ reshape(U1 * (Diagonal(invsqrtS1) * (h .+ h') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (h .+ h') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
-        du1 = U1 * (F .* (x -> x .+ x')(U1' * reshape(dac, χ, d * χ) * V1 * Diagonal(S)))
-        du1 .-= U1 * Diagonal(im .* imag.(vec(sum(du1; dims = 1))))
+    temp, = linsolve((x -> cat(real(x), imag(x); dims = 3))(K1 .+ K1' .- (K2 .+ K2')); ishermitian = true, isposdef = true, tol = tol, verbosity = 0) do x
+        h = x[:, :, 1] .+ im .* x[:, :, 2]
+        dac = reshape(U1 * (Diagonal(invsqrtS1) * (h .+ h') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (h .+ h') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
         k1 = Diagonal(invsqrtS1) * (U1' * reshape(dac, χ, d * χ) * V1) * Diagonal(sqrtS1)
         k2 = Diagonal(invsqrtS2) * (V2' * reshape(dac, χ * d, χ)' * U2) * Diagonal(sqrtS2)
-        vcat(real(vec(sum(du1; dims = 1))), vec((x -> cat(real(x), imag(x); dims = 3))(k1 .+ k1' .- (k2 .+ k2'))))
+        (x -> cat(real(x), imag(x); dims = 3))(k1 .+ k1' .- (k2 .+ k2'))
     end
-    y = reshape(x[χ + 1 : end], χ, χ, 2)
-    h = y[:, :, 1] .+ im .* y[:, :, 2]
-    dAC .-= reshape(U1 * ((x -> x .+ x')(F .* (U1' * transpose(reshape(repeat(x[1 : χ], χ), χ, χ)))) * Diagonal(S)) * V1', χ, d, χ) .+ reshape(U1 * (Diagonal(invsqrtS1) * (h .+ h') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (h .+ h') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
+    h = temp[:, :, 1] .+ im .* temp[:, :, 2]
+    dAC .-= reshape(U1 * (Diagonal(invsqrtS1) * (h .+ h') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (h .+ h') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
     dAC .-= AC .* real(dot(AC, dAC))
 end
 
