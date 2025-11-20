@@ -99,17 +99,18 @@ struct UniformMPS <: Manifold end
 
 function Optim.retract!(::UniformMPS, AC; tol = 1e-12)
     χ, d, = size(AC)
-    U, S, V = svdfix(reshape(AC, χ * d, χ); fix = :V)
+    U0, S, V0 = svdfix(reshape(AC, χ * d, χ); fix = :V)
+    U0 .= reshape(V0' * reshape(U0, χ, d * χ), χ * d, χ)
     S ./= norm(S)
-    f(X) = X .- svdvals(reshape(U * Diagonal(X) * V', χ, d * χ))
+    f(X) = X .- svdvals(reshape(U0 * Diagonal(X), χ, d * χ))
     while norm(f(S)) > tol
         S .-= jacobian(f, S)[1] \ f(S)
         @. S = abs(S)
         S ./= norm(S)
     end
-    AC .= reshape(U * Diagonal(S) * V', χ, d, χ)
+    AC .= reshape(U0 * Diagonal(S), χ, d, χ)
     U, = svdfix(reshape(AC, χ, d * χ); fix = :U)
-    AC .= ein"ijk, kl -> ijl"(AC, V * U')
+    AC .= ein"ij, (jkl, lm) -> ikm"(V0 * U', AC, V0')
 end
 
 function Optim.project_tangent!(::UniformMPS, dAC, AC; tol = 1e-12)
