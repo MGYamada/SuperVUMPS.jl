@@ -82,8 +82,7 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     L, AR
 end
 
-function retract(AC, dAC; tol = 1e-12, Nstep = 10)
-    # Simple retraction by solving the differential equation by the Euler method
+function retract(AC, dAC; tol = 1e-12, Nstep = 100)
     χ, d, = size(AC)
     L, C = polar(reshape(AC, χ * d, χ))
     AL = Array(reshape(L, χ, d, χ))
