@@ -55,44 +55,36 @@ end
 function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-12, maxiter = 100, kwargs...)
     χ, d, = size(A)
     Abar = conj(A)
-    _, vecs1 = eigsolve(C * C', 1, :LR; ishermitian = false, tol = 1e-2tol, verbosity = 0, kwargs...) do X
-        ein"ijk, (ljm, mk) -> li"(Abar, A, X)
-    end
-    ρ = vecs1[1]
-    U, S, = svd(ρ)
-    C = U * Diagonal(sqrt.(S)) * U'
-    C ./= norm(C)
-    L, R = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
-    AR = Array(reshape(R, χ, d, χ))
-    δ = norm(C .- L)
+    L = copy(C)
+    f(X) = X * X' .- ein"ijk, (ljm, mk) -> li"(Abar, A, X * X')
     numiter = 0
-    while δ > tol && numiter < maxiter
-        ARbar = conj(AR)
-        _, vecs = eigsolve(L, 1, :LR; ishermitian = false, tol = 1e-2δ, verbosity = 0, kwargs...) do X
-            ein"ijk, (ljm, mk) -> li"(ARbar, A, X)
+    while norm(f(L)) > tol && numiter < maxiter
+        u, s, v = svd(reshape(reshape(A, χ * d, χ) * L, χ, d * χ))
+        dL, = linsolve((x -> cat(real(x), imag(x); dims = 3))(f(L)); tol = 1e-2tol, verbosity = 0) do x
+            (x -> cat(real(x), imag(x); dims = 3))((x[:, :, 1] .+ im .* x[:, :, 2]) * L' .+ L * (x[:, :, 1] .+ im .* x[:, :, 2])' .- ein"ijk, (ljm, mk) -> li"(Abar, A, (x[:, :, 1] .+ im .* x[:, :, 2]) * L' .+ L * (x[:, :, 1] .+ im .* x[:, :, 2])'))
         end
-        C = vecs[1]
-        C, = polar(C; rev = true)
-        L, R = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
-        AR .= reshape(R, χ, d, χ)
+        L .-= dL[:, :, 1] .+ im .* dL[:, :, 2]
+        U, S, V = svd(L)
+        L .= U * Diagonal(S) * U'
         L ./= norm(L)
-        δ = norm(C .- L)
         numiter += 1
     end
-    L, AR
+    _, R = polar(reshape(reshape(A, χ * d, χ) * L, χ, d * χ); rev = true)
+    L, Array(reshape(R, χ, d, χ))
 end
 
-function retract(AC, dAC; tol = 1e-12, Nstep = 100)
+function retract(AC, dAC; tol = 1e-12, δ = 1e-2)
     χ, d, = size(AC)
     L, C = polar(reshape(AC, χ * d, χ))
     AL = Array(reshape(L, χ, d, χ))
+    Nstep = ceil(Int, norm(dAC) / δ)
     for i in 1 : Nstep
         L, = polar(reshape(AC .+ (i / Nstep) .* dAC, χ * d, χ))
         AL .= reshape(L, χ, d, χ)
         C .= rightorth(AL, C; tol = tol)[1]
     end
     ACnew = ein"ijk, kl -> ijl"(AL, C)
-    ACnew /= norm(ACnew)
+    ACnew ./= norm(ACnew)
 end
 
 function project_tangent(AC, dAC; tol = 1e-12)
