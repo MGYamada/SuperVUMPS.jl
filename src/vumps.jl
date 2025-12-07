@@ -55,34 +55,82 @@ end
 function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e-12, maxiter = 100, kwargs...)
     χ, d, = size(A)
     Abar = conj(A)
-    L = copy(C)
-    f(X) = X * X' .- ein"ijk, (ljm, mk) -> li"(Abar, A, X * X')
+    _, vecs1 = eigsolve(C * C', 1, :LR; ishermitian = false, tol = 1e-2tol, verbosity = 0, kwargs...) do X
+        ein"ijk, (ljm, mk) -> li"(Abar, A, X)
+    end
+    ρ = vecs1[1]
+    U, S, = svd(ρ)
+    C = U * Diagonal(sqrt.(S)) * U'
+    C ./= norm(C)
+    L, R = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
+    AR = Array(reshape(R, χ, d, χ))
+    δ = norm(C .- L)
     numiter = 0
-    while norm(f(L)) > tol && numiter < maxiter
-        u, s, v = svd(reshape(reshape(A, χ * d, χ) * L, χ, d * χ))
-        dL, = linsolve((x -> cat(real(x), imag(x); dims = 3))(f(L)); tol = 1e-2tol, verbosity = 0) do x
-            (x -> cat(real(x), imag(x); dims = 3))((x[:, :, 1] .+ im .* x[:, :, 2]) * L' .+ L * (x[:, :, 1] .+ im .* x[:, :, 2])' .- ein"ijk, (ljm, mk) -> li"(Abar, A, (x[:, :, 1] .+ im .* x[:, :, 2]) * L' .+ L * (x[:, :, 1] .+ im .* x[:, :, 2])'))
+    while δ > tol && numiter < maxiter
+        ARbar = conj(AR)
+        _, vecs = eigsolve(L, 1, :LR; ishermitian = false, tol = 1e-2δ, verbosity = 0, kwargs...) do X
+            ein"ijk, (ljm, mk) -> li"(ARbar, A, X)
         end
-        L .-= dL[:, :, 1] .+ im .* dL[:, :, 2]
-        U, S, V = svd(L)
-        L .= U * Diagonal(S) * U'
+        C = vecs[1]
+        C, = polar(C; rev = true)
+        L, R = polar(reshape(reshape(A, χ * d, χ) * C, χ, d * χ); rev = true)
+        AR .= reshape(R, χ, d, χ)
         L ./= norm(L)
+        δ = norm(C .- L)
         numiter += 1
     end
-    _, R = polar(reshape(reshape(A, χ * d, χ) * L, χ, d * χ); rev = true)
-    L, Array(reshape(R, χ, d, χ))
+    L, AR
 end
 
-function retract(AC, dAC; tol = 1e-12, δ = 1e-2)
+function retract(AC, dAC; tol = 1e-12, Nstep = 100)
     χ, d, = size(AC)
-    L, C = polar(reshape(AC, χ * d, χ))
-    AL = Array(reshape(L, χ, d, χ))
-    Nstep = ceil(Int, norm(dAC) / δ)
+    A = reshape(AC, χ * d, χ)
+    L, C = polar(A)
+    dA = reshape(dAC, χ * d, χ)
+    dC = sylvester(C, C, -(dA' * A .+ A' * dA))
+    dL = (dA .- L * dC) / C
+    S = L' * dL
+    Sk = 0.5 .* (S - S')
+    K = dL .- L * Sk
+    q, r = qr(K)
+    U = q[:, 1 : χ]
+    R = r[1 : χ, :]
+    Γ = [Sk -R'; R zeros(eltype(L), χ, χ)]
+    vals, vecs = eigen(Γ)
+    T = U' * (dL - L * S)
+    ST = [S; T]
+    Lt = copy(L)
+    X = C * C'
+    X ./= norm(X)
     for i in 1 : Nstep
-        L, = polar(reshape(AC .+ (i / Nstep) .* dAC, χ * d, χ))
-        AL .= reshape(L, χ, d, χ)
-        C .= rightorth(AL, C; tol = tol)[1]
+        expΓ = vecs * Diagonal(exp.((i / Nstep) .* vals)) * inv(vecs)
+        M = expΓ[1 : χ, 1 : χ]
+        N = expΓ[χ + 1 : end, 1 : χ]
+        Lt = L * M .+ U * N
+        STt = expΓ * ST
+        St = STt[1 : χ, :]
+        Tt = STt[χ + 1 : end, :]
+        M2 = expΓ[1 : χ, χ + 1 : end]
+        N2 = expΓ[χ + 1 : end, χ + 1 : end]
+        Ut = L * M2 + U * N2
+        dLt = Lt * St .+ Ut * Tt
+        AL = reshape(Lt, χ, d, χ)
+        dAL = reshape(dLt, χ, d, χ) ./ Nstep
+        ALbar = conj(AL)
+        X .+= linsolve(x -> x .- ein"ijk, (ljm, mk) -> li"(ALbar, AL, x), ein"ijk, (ljm, mk) -> li"(conj(dAL), AL, X) .+ ein"ijk, (ljm, mk) -> li"(ALbar, dAL, X); tol = 1e-2tol, verbosity = 0)[1]
+        while true
+            fX = X .- ein"ijk, (ljm, mk) -> li"(ALbar, AL, X)
+            if norm(fX) < tol
+                break
+            end
+            X .-= linsolve(x -> x .- ein"ijk, (ljm, mk) -> li"(ALbar, AL, x), fX; tol = 1e-2tol, verbosity = 0)[1]
+            X ./= norm(X)
+        end
     end
+    U, S, = svd(X)
+    C .= U * Diagonal(sqrt.(S)) * U'
+    C ./= norm(C)
+    AL = reshape(Lt, χ, d, χ)
     ACnew = ein"ijk, kl -> ijl"(AL, C)
     ACnew ./= norm(ACnew)
 end
