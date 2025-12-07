@@ -82,12 +82,12 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     L, AR
 end
 
-function retract(AC, dAC; tol = 1e-12, Nstep = 100)
+function retract(AC, dAC; tol = 1e-12, Nstep = 10)
     χ, d, = size(AC)
     A = reshape(AC, χ * d, χ)
     L, C = polar(A)
     dA = reshape(dAC, χ * d, χ)
-    dC = sylvester(C, C, -(dA' * A .+ A' * dA))
+    dC = sylvester(C, C, -(dA' * A .+ A' * dA)) # fix later
     dL = (dA .- L * dC) / C
     S = L' * dL
     Sk = 0.5 .* (S - S')
