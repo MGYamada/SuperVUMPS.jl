@@ -82,12 +82,12 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     L, AR
 end
 
-function retract(AC, dAC; tol = 1e-12, Nstep = 100)
+function retract(AC, dAC; tol = 1e-12, Nstep = 10)
     χ, d, = size(AC)
     A = reshape(AC, χ * d, χ)
     L, C = polar(A)
     dA = reshape(dAC, χ * d, χ)
-    dC = sylvester(C, C, -(dA' * A .+ A' * dA))
+    dC = sylvester(C, C, -(dA' * A .+ A' * dA)) # fix later
     dL = (dA .- L * dC) / C
     S = L' * dL
     Sk = 0.5 .* (S - S')
@@ -97,8 +97,6 @@ function retract(AC, dAC; tol = 1e-12, Nstep = 100)
     R = r[1 : χ, :]
     Γ = [Sk -R'; R zeros(eltype(L), χ, χ)]
     vals, vecs = eigen(Γ)
-    T = U' * (dL - L * S)
-    ST = [S; T]
     Lt = copy(L)
     X = C * C'
     X ./= norm(X)
@@ -107,17 +105,12 @@ function retract(AC, dAC; tol = 1e-12, Nstep = 100)
         M = expΓ[1 : χ, 1 : χ]
         N = expΓ[χ + 1 : end, 1 : χ]
         Lt = L * M .+ U * N
-        STt = expΓ * ST
-        St = STt[1 : χ, :]
-        Tt = STt[χ + 1 : end, :]
-        M2 = expΓ[1 : χ, χ + 1 : end]
-        N2 = expΓ[χ + 1 : end, χ + 1 : end]
-        Ut = L * M2 + U * N2
-        dLt = Lt * St .+ Ut * Tt
         AL = reshape(Lt, χ, d, χ)
-        dAL = reshape(dLt, χ, d, χ) ./ Nstep
         ALbar = conj(AL)
-        X .+= linsolve(x -> x .- ein"ijk, (ljm, mk) -> li"(ALbar, AL, x), ein"ijk, (ljm, mk) -> li"(conj(dAL), AL, X) .+ ein"ijk, (ljm, mk) -> li"(ALbar, dAL, X); tol = 1e-2tol, verbosity = 0)[1]
+        _, vecs1 = eigsolve(X, 1, :LR; ishermitian = false, tol = 1e-2tol, verbosity = 0) do x
+            ein"ijk, (ljm, mk) -> li"(ALbar, AL, x)
+        end
+        X .= vecs1[1]
         while true
             fX = X .- ein"ijk, (ljm, mk) -> li"(ALbar, AL, X)
             if norm(fX) < tol
