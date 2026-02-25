@@ -82,53 +82,25 @@ function rightorth(A, C = Matrix{eltype(A)}(I, size(A, 1), size(A, 1)); tol = 1e
     L, AR
 end
 
-function retract(AC, dAC; tol = 1e-12, Nstep = 10)
+struct UniformMPS <: Manifold end
+
+function Optim.retract!(::UniformMPS, AC; tol = 1e-12)
     χ, d, = size(AC)
-    A = reshape(AC, χ * d, χ)
-    L, C = polar(A)
-    dA = reshape(dAC, χ * d, χ)
-    dC = sylvester(C, C, -(dA' * A .+ A' * dA)) # fix later
-    dL = (dA .- L * dC) / C
-    S = L' * dL
-    Sk = 0.5 .* (S - S')
-    K = dL .- L * Sk
-    q, r = qr(K)
-    U = q[:, 1 : χ]
-    R = r[1 : χ, :]
-    Γ = [Sk -R'; R zeros(eltype(L), χ, χ)]
-    vals, vecs = eigen(Γ)
-    Lt = copy(L)
-    X = C * C'
-    X ./= norm(X)
-    for i in 1 : Nstep
-        expΓ = vecs * Diagonal(exp.((i / Nstep) .* vals)) * inv(vecs)
-        M = expΓ[1 : χ, 1 : χ]
-        N = expΓ[χ + 1 : end, 1 : χ]
-        Lt = L * M .+ U * N
-        AL = reshape(Lt, χ, d, χ)
-        ALbar = conj(AL)
-        _, vecs1 = eigsolve(X, 1, :LR; ishermitian = false, tol = 1e-2tol, verbosity = 0) do x
-            ein"ijk, (ljm, mk) -> li"(ALbar, AL, x)
-        end
-        X .= vecs1[1]
-        while true
-            fX = X .- ein"ijk, (ljm, mk) -> li"(ALbar, AL, X)
-            if norm(fX) < tol
-                break
-            end
-            X .-= linsolve(x -> x .- ein"ijk, (ljm, mk) -> li"(ALbar, AL, x), fX; tol = 1e-2tol, verbosity = 0)[1]
-            X ./= norm(X)
-        end
+    L, C = polar(reshape(AC, χ * d, χ))
+    AL = reshape(L, χ, d, χ)
+    ALbar = conj(AL)
+    _, vecs1 = eigsolve(C * C', 1, :LR; ishermitian = false, tol = 1e-2tol, verbosity = 0) do x
+        ein"ijk, (ljm, mk) -> li"(ALbar, AL, x)
     end
+    X = vecs1[1]
     U, S, = svd(X)
     C .= U * Diagonal(sqrt.(S)) * U'
     C ./= norm(C)
-    AL = reshape(Lt, χ, d, χ)
-    ACnew = ein"ijk, kl -> ijl"(AL, C)
-    ACnew ./= norm(ACnew)
+    AC .= ein"ijk, kl -> ijl"(AL, C)
+    AC ./= norm(AC)
 end
 
-function project_tangent(AC, dAC; tol = 1e-12)
+function Optim.project_tangent!(::UniformMPS, dAC, AC; tol = 1e-12)
     χ, d, = size(AC)
     U1, S1, V1 = svd(reshape(AC, χ, d * χ))
     U2, S2, V2 = svd(reshape(AC, χ * d, χ) * U1)
@@ -148,12 +120,9 @@ function project_tangent(AC, dAC; tol = 1e-12)
         (x -> cat(real(x), imag(x); dims = 3))(k1 .+ k1' .- (k2 .+ k2'))
     end
     h = temp[:, :, 1] .+ im .* temp[:, :, 2]
-    dACnew = copy(dAC)
-    dACnew .-= reshape(U1 * (Diagonal(invsqrtS1) * (h .+ h') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (h .+ h') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
-    dACnew .-= AC .* real(dot(AC, dACnew))
+    dAC .-= reshape(U1 * (Diagonal(invsqrtS1) * (h .+ h') * Diagonal(sqrtS1)) * V1', χ, d, χ) .- reshape(U2 * (Diagonal(sqrtS2) * (h .+ h') * Diagonal(invsqrtS2)) * V2', χ, d, χ)
+    dAC .-= AC .* real(dot(AC, dAC))
 end
-
-transport(x, y, v) = project_tangent(y, v)
 
 struct MixedCanonicalMPS{T <: Complex}
     AL::Array{T, 3}
@@ -209,20 +178,27 @@ function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T
     HAC, HC_rtn
 end
 
-function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false, verbose = false) where T
+function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) where T
     χ, d, = size(A.AL)
-    U, S, V = svd(A.C)
+    U, _, V = svd(A.C)
     AC = ein"ij, (jkl, lm) -> ikm"(U', A.AC, V)
 
-    function f(ac)
-        l, = polar(reshape(ac, χ * d, χ))
-        al = reshape(l, χ, d, χ)
-        real(local_energy(al, ac, h))
+    function fg!(F, G, x)
+        val, (dx,) = withgradient(x) do ac
+            l, = polar(reshape(ac, χ * d, χ))
+            al = reshape(l, χ, d, χ)
+            real(local_energy(al, ac, h))
+        end
+        if G !== nothing
+            G .= dx
+        end
+        if F !== nothing
+            return val
+        end
     end
-    function grad!(g, ac)
-        g .= gradient(f, ac)[1]
-    end
-    AC, = riemannian_lbfgs(f, grad!, AC; maxiter = iterations, m = 10, tol = tol, verbose = verbose)
+    res = optimize(only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
+
+    AC .= Optim.minimizer(res)
     L, = polar(reshape(AC, χ * d, χ))
     AL = reshape(L, χ, d, χ)
     C, R = polar(reshape(AC, χ, d * χ); rev = true)
