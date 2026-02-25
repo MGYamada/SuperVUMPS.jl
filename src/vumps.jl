@@ -88,7 +88,14 @@ function Optim.retract!(::UniformMPS, AC; tol = 1e-12)
     χ, d, = size(AC)
     L, C = polar(reshape(AC, χ * d, χ))
     AL = reshape(L, χ, d, χ)
-    C, = rightorth(AL, C; tol = tol)
+    ALbar = conj(AL)
+    _, vecs1 = eigsolve(C * C', 1, :LR; ishermitian = false, tol = 1e-2tol, verbosity = 0) do x
+        ein"ijk, (ljm, mk) -> li"(ALbar, AL, x)
+    end
+    X = vecs1[1]
+    U, S, = svd(X)
+    C .= U * Diagonal(sqrt.(S)) * U'
+    C ./= norm(C)
     AC .= ein"ijk, kl -> ijl"(AL, C)
     AC ./= norm(AC)
 end
