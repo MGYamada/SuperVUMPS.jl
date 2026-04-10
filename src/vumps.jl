@@ -179,49 +179,38 @@ function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T
 end
 
 function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) where T
-    χ, d, = size(A.AL)
-    U, _, V = svd(A.C)
-    AC = ein"ij, (jkl, lm) -> ikm"(U', A.AC, V)
+    ignore() do
+        χ, d, = size(A.AL)
+        U, _, V = svd(A.C)
+        AC = ein"ij, (jkl, lm) -> ikm"(U', A.AC, V)
 
-    function fg!(F, G, x)
-        val, (dx,) = withgradient(x) do ac
-            l, = polar(reshape(ac, χ * d, χ))
-            al = reshape(l, χ, d, χ)
-            real(local_energy(al, ac, h))
+        function fg!(F, G, x)
+            val, (dx,) = withgradient(x) do ac
+                l, = polar(reshape(ac, χ * d, χ))
+                al = reshape(l, χ, d, χ)
+                real(local_energy(al, ac, h))
+            end
+            if G !== nothing
+                G .= dx
+            end
+            if F !== nothing
+                return val
+            end
         end
-        if G !== nothing
-            G .= dx
-        end
-        if F !== nothing
-            return val
-        end
+        res = optimize(only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
+
+        AC .= Optim.minimizer(res)
+        L, = polar(reshape(AC, χ * d, χ))
+        AL = reshape(L, χ, d, χ)
+        C, R = polar(reshape(AC, χ, d * χ); rev = true)
+        AR = reshape(R, χ, d, χ)
+        A = MixedCanonicalMPS(AL, AR, AC, C)
     end
-    res = optimize(only_fg!(fg!), AC, LBFGS(manifold = UniformMPS()), Optim.Options(g_abstol = tol, allow_f_increases = true, iterations = iterations))
-
-    AC .= Optim.minimizer(res)
-    L, = polar(reshape(AC, χ * d, χ))
-    AL = reshape(L, χ, d, χ)
-    C, R = polar(reshape(AC, χ, d * χ); rev = true)
-    AR = reshape(R, χ, d, χ)
-    A = MixedCanonicalMPS(AL, AR, AC, C)
 
     E = real(local_energy(A.AL, A.AC, h))
     if Hamiltonian
         E, A, Hamiltonian_construction(h, A, E; tol = tol)...
     else
         E, A
-    end
-end
-
-Zygote.@adjoint function svumps(h, A; kwargs...)
-    X = svumps(h, A; kwargs...)
-    _, A, = X
-    X, function (Δ)
-        if all(Δ[2 : end] .=== nothing)
-            _, back = pullback(x -> real(local_energy(A.AL, A.AC, x)), h)
-            (back(Δ[1])[1], nothing)
-        else
-            error("MPS/effective Hamiltonian differentiation not supported")
-        end
     end
 end
