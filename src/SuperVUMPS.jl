@@ -8,7 +8,7 @@ using Optim
 using KrylovKit
 using Printf
 
-export svumps, svumps_hamiltonian, local_energy, Hamiltonian_construction, canonicalMPS, MixedCanonicalMPS, conjugateMPS
+export svumps, local_energy, Hamiltonian_construction, canonicalMPS, MixedCanonicalMPS, conjugateMPS
 
 include("vumps.jl")
 
