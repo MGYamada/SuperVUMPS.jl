@@ -47,7 +47,7 @@ end
         χ = 2
         d = 2
         A = canonicalMPS(ComplexF64, χ, d)
-        E, A2 = svumps(h, A; tol = 1e-5, iterations = 2, verbose = false)
+        E, A2 = svumps(h, A; tol = 1e-5, iterations = 2)
 
         @test isfinite(E)
         assert_mps_shape(A2, χ, d)
@@ -60,7 +60,7 @@ end
     d = 2
     h = transverse_field_ising(; g = 0.9)
     A = canonicalMPS(ComplexF64, χ, d)
-    kwargs = (; tol = 1e-5, iterations = 1, verbose = false)
+    kwargs = (; tol = 1e-5, iterations = 1)
 
     _, Aopt = svumps(h, A; kwargs...)
     actual = Zygote.gradient(x -> svumps(x, A; kwargs...)[1], h)[1]
@@ -74,7 +74,7 @@ end
     d = 2
     h = transverse_field_ising(; g = 1.0)
     A = canonicalMPS(ComplexF64, χ, d)
-    E, A2, HAC, HC = svumps_hamiltonian(h, A; tol = 1e-5, iterations = 1, verbose = false)
+    E, A2, HAC, HC = svumps(h, A; tol = 1e-5, iterations = 1, Hamiltonian = true)
 
     @test isfinite(E)
     assert_mps_shape(A2, χ, d)
