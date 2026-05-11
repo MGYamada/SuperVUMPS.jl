@@ -1,6 +1,6 @@
 name = "SuperVUMPS"
 uuid = "251f20e1-0c2c-4c9f-ab3f-16280b56c0f4"
-version = "1.6.4"
+version = "1.6.5"
 authors = ["MGYamada <myspinor@gmail.com>"]
 
 [deps]
@@ -15,7 +15,8 @@ Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 [compat]
 
 [extras]
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test"]
+test = ["Random", "Test"]

@@ -1,4 +1,5 @@
 using LinearAlgebra
+using Random
 using Test
 
 using SuperVUMPS
@@ -52,6 +53,38 @@ end
         @test isfinite(E)
         assert_mps_shape(A2, χ, d)
         @test isfinite(real(local_energy(A2.AL, A2.AC, h)))
+    end
+end
+
+@testset "svumps end-to-end chi=4" begin
+    χ = 4
+    d = 2
+    cases = (
+        ("transverse-field Ising", transverse_field_ising(; g = 1.0), -1.24),
+        ("Heisenberg", heisenberg(), -0.42),
+    )
+
+    for (name, h, energy_bound) in cases
+        @testset "$name" begin
+            Random.seed!(1234)
+            A0 = canonicalMPS(ComplexF64, χ, d)
+
+            E0 = real(local_energy(A0.AL, A0.AC, h))
+            E, A = svumps(h, A0; tol = 1e-6, iterations = 25)
+
+            @test isfinite(E)
+            @test E < E0
+            @test E < energy_bound
+            @test E ≈ real(local_energy(A.AL, A.AC, h)) atol = 1e-10
+
+            assert_mps_shape(A, χ, d)
+            @test isapprox(norm(A.C), 1; atol = 1e-8)
+
+            left_AC = reshape(reshape(A.AL, χ * d, χ) * A.C, χ, d, χ)
+            right_AC = reshape(A.C * reshape(A.AR, χ, d * χ), χ, d, χ)
+            @test A.AC ≈ left_AC atol = 1e-8
+            @test A.AC ≈ right_AC atol = 1e-8
+        end
     end
 end
 
