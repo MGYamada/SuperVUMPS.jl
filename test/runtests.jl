@@ -15,6 +15,14 @@ function assert_mps_shape(A, χ, d)
     @test size(A.C) == (χ, χ)
 end
 
+function random_hermitian_tensor(T, d, n)
+    dim = d^n
+    H = randn(T, dim, dim)
+    H = (H + H') ./ 2
+    reshape(H, ntuple(_ -> d, 2n))
+end
+
+@testset "SuperVUMPS" begin
 @testset "spin model fixtures" begin
     for h in (transverse_field_ising(), heisenberg())
         @test size(h) == (2, 2, 2, 2)
@@ -31,12 +39,40 @@ end
     @test isapprox(norm(A.C), 1; atol = 1e-10)
 end
 
+@testset "polar decomposition" begin
+    A = randn(ComplexF64, 4, 3)
+    Q, P = SuperVUMPS.polar(A)
+
+    @test Q' * Q ≈ Matrix{ComplexF64}(I, 3, 3) atol = 1e-10
+    @test P ≈ P' atol = 1e-10
+    @test Q * P ≈ A atol = 1e-10
+
+    B = randn(ComplexF64, 3, 4)
+    P_rev, Q_rev = SuperVUMPS.polar(B; rev = true)
+
+    @test Q_rev * Q_rev' ≈ Matrix{ComplexF64}(I, 3, 3) atol = 1e-10
+    @test P_rev ≈ P_rev' atol = 1e-10
+    @test P_rev * Q_rev ≈ B atol = 1e-10
+end
+
 @testset "local energy" begin
     χ = 2
     d = 2
     A = canonicalMPS(ComplexF64, χ, d)
 
     for h in (transverse_field_ising(; g = 0.7), heisenberg(; hz = 0.2))
+        E = local_energy(A.AL, A.AC, h)
+        @test isfinite(real(E))
+        @test isapprox(imag(E), 0; atol = 1e-8)
+    end
+end
+
+@testset "local energy higher-body tensors" begin
+    χ = 2
+    d = 2
+    A = canonicalMPS(ComplexF64, χ, d)
+
+    for h in (random_hermitian_tensor(ComplexF64, d, 3), random_hermitian_tensor(ComplexF64, d, 4))
         E = local_energy(A.AL, A.AC, h)
         @test isfinite(real(E))
         @test isapprox(imag(E), 0; atol = 1e-8)
@@ -113,4 +149,7 @@ end
     assert_mps_shape(A2, χ, d)
     @test size(HAC) == (χ, d, χ, χ, d, χ)
     @test size(HC) == (χ, χ, χ, χ)
+    @test reshape(HAC, χ * d * χ, χ * d * χ) ≈ reshape(HAC, χ * d * χ, χ * d * χ)' atol = 1e-8
+    @test reshape(HC, χ * χ, χ * χ) ≈ reshape(HC, χ * χ, χ * χ)' atol = 1e-8
+end
 end

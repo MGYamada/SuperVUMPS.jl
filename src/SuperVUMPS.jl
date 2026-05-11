@@ -1,6 +1,7 @@
 module SuperVUMPS
 
 using LinearAlgebra
+using ChainRulesCore
 using OMEinsum
 using Zygote
 using NLSolversBase
