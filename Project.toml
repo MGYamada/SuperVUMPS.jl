@@ -1,6 +1,6 @@
 name = "SuperVUMPS"
 uuid = "251f20e1-0c2c-4c9f-ab3f-16280b56c0f4"
-version = "1.6.6"
+version = "1.7.0"
 authors = ["MGYamada <myspinor@gmail.com>"]
 
 [deps]
@@ -10,7 +10,6 @@ LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 NLSolversBase = "d41bc354-129a-5804-8e4c-c37616107c6c"
 OMEinsum = "ebe7aa44-baf0-506c-a96f-8464559b3922"
 Optim = "429524aa-4258-5aef-a3af-852621145aeb"
-Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [compat]
