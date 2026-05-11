@@ -7,9 +7,9 @@ using Zygote
 using NLSolversBase
 using Optim
 using KrylovKit
-using Printf
 
-export svumps, local_energy, Hamiltonian_construction, canonicalMPS, MixedCanonicalMPS, conjugateMPS
+export svumps, svumps_result, local_energy, construct_hamiltonian, Hamiltonian_construction
+export canonicalMPS, MixedCanonicalMPS, conjugateMPS, SVUMPSOptions, SVUMPSResult
 
 include("vumps.jl")
 

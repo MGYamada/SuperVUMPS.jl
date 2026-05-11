@@ -92,6 +92,28 @@ end
     end
 end
 
+@testset "svumps result API" begin
+    χ = 2
+    d = 2
+    h = transverse_field_ising(; g = 1.0)
+    A = canonicalMPS(ComplexF64, χ, d)
+    options = SVUMPSOptions(; tol = 1e-5, iterations = 1, hamiltonian = true)
+    result = svumps_result(h, A; options)
+
+    @test result isa SVUMPSResult
+    @test isfinite(result.energy)
+    assert_mps_shape(result.state, χ, d)
+    @test result.hamiltonian !== nothing
+
+    HAC, HC = result.hamiltonian
+    HAC2, HC2 = construct_hamiltonian(h, result.state, result.energy; tol = options.tol)
+    HAC3, HC3 = Hamiltonian_construction(h, result.state, result.energy; tol = options.tol)
+    @test HAC ≈ HAC2
+    @test HC ≈ HC2
+    @test HAC ≈ HAC3
+    @test HC ≈ HC3
+end
+
 @testset "svumps end-to-end chi=4" begin
     χ = 4
     d = 2
