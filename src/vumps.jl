@@ -179,7 +179,7 @@ function Hamiltonian_construction(h::Array{T, 4}, A, E; tol = 1e-12) where T
 end
 
 function svumps(h::T, A; tol = 1e-8, iterations = 1000, Hamiltonian = false) where T
-    ignore() do
+    ChainRulesCore.ignore_derivatives() do
         χ, d, = size(A.AL)
         U, _, V = svd(A.C)
         AC = ein"ij, (jkl, lm) -> ikm"(U', A.AC, V)

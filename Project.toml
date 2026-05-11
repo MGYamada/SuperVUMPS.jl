@@ -1,9 +1,10 @@
 name = "SuperVUMPS"
 uuid = "251f20e1-0c2c-4c9f-ab3f-16280b56c0f4"
-version = "1.6.5"
+version = "1.6.6"
 authors = ["MGYamada <myspinor@gmail.com>"]
 
 [deps]
+ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
 KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 NLSolversBase = "d41bc354-129a-5804-8e4c-c37616107c6c"
